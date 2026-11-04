@@ -1,0 +1,16 @@
+# 1. Request (Goal)
+nav_msgs/Trajectory trajectory          # 使用軌跡訊息
+
+---
+# 2. Result
+geometry_msgs/Pose final_pose           # 最終停止的位置與朝向
+bool has_collision                      # 是否發生碰撞
+geometry_msgs/Point collision_position  # 碰撞發生的具體位
+string[] collided_drone_ids             # 與之碰撞的無人機 ID
+float64[] waypoint_time_difference      # 抵達軌跡中每個點的時間誤差 (秒)
+float64[] waypoint_distance_difference  # 抵達軌跡中每個點的空間誤差 (公尺)
+
+---
+# 3. Feedback
+# 執行過程中持續回傳當前狀態
+nav_msgs/TrajectoryPoint trajectorypoint  # 無人機現在的位置與朝向 
