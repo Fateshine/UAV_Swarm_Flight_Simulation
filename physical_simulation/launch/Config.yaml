@@ -1,2 +1,4 @@
 UAV:
   UAV_count: 10  # 在這裡動態決定要開啟幾台無人機
+System:
+  use_sim_time: True # 是否使用Gazebo時鐘

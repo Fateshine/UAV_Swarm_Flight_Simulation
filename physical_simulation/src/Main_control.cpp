@@ -2,83 +2,100 @@
 
 MainControl::MainControl(const rclcpp::NodeOptions &options) : Node("MainControl", options)
 {
-  memory_init();
-  ros2_msg_init();
+  MemoryInit();
+  Ros2MsgInit();
+  ParmInit();
 }
 
-void MainControl::memory_init()
+void MainControl::ParmInit()
 {
-  Action_clients.reserve(UAV_num);
-  Trajectorys_all_UAV_flight_plan.reserve(UAV_num);
-  Trajectorys_all_UAV_result.reserve(UAV_num);
-  UAV_all_result_status.reserve(UAV_num);
-
-  for (size_t i = 0; i < UAV_num; ++i)
-  {
-    UAV_all_result_status[i]->waypoint_time_difference.reserve(Waypoint_num);
-    UAV_all_result_status[i]->waypoint_distance_difference.reserve(Waypoint_num);
-  }
+  this->declare_parameter<int>("UAV_count");
+  UAV_num_ = static_cast<uint16_t>(this->get_parameter("UAV_count").as_int());
 }
 
-void MainControl::ros2_msg_init()
+void MainControl::MemoryInit()
 {
-  callback_group_Reentrant = rclcpp::Node::create_callback_group(rclcpp::CallbackGroupType::Reentrant);
-  for (size_t i = 0; i < UAV_num; ++i)
+  Action_clients_.reserve(UAV_num_ + 1);
+  Trajectorys_all_UAV_flight_plan_.reserve(UAV_num_ + 1);
+  Trajectorys_all_UAV_result_.reserve(UAV_num_ + 1);
+  UAV_all_result_status_.reserve(UAV_num_ + 1);
+  goal_handles_.reserve(UAV_num_ + 1);
+}
+
+void MainControl::Ros2MsgInit()
+{
+  callback_group_Reentrant_ = rclcpp::Node::create_callback_group(rclcpp::CallbackGroupType::Reentrant);
+  for (size_t i = 1; i <= UAV_num_; ++i)
   {
-    std::string action_name = "/" + std::to_string(i) + "/navigate";
+    std::string action_name = "/px4_" + std::to_string(i) + "/navigate";
     std::shared_ptr<rclcpp_action::Client<FlightAction>> action_client = rclcpp_action::create_client<FlightAction>(
         this,
         action_name,
-        callback_group_Reentrant,
+        callback_group_Reentrant_,
         rcl_action_client_get_default_options());
-    Action_clients.push_back(action_client);
+    Action_clients_.push_back(action_client);
   }
 }
 
-void MainControl::get_flight_plan(std::vector<nav_msgs::msg::Trajectory::ConstSharedPtr> flight_plan)
+void MainControl::GetFlightPlan(std::vector<nav_msgs::msg::Trajectory::ConstSharedPtr> flight_plan)
 {
-  Trajectorys_all_UAV_flight_plan.clear();
-  Trajectorys_all_UAV_result.clear();
-  UAV_all_result_status.clear();
+  Trajectorys_all_UAV_flight_plan_.clear();
+  Trajectorys_all_UAV_result_.clear();
+  UAV_all_result_status_.clear();
 
-  for (size_t i = 0; i < UAV_num; ++i)
-    Trajectorys_all_UAV_flight_plan[i] = flight_plan[i];
-  send_goal_all_UAV();
+  size_t maxLen = 0;
+
+  // 加上 const auto& 避免複製內層 vector
+  for (const auto &row : flight_plan)
+    maxLen = std::max(maxLen, row->points.size());
+
+  Waypoint_num_ = maxLen;
+
+  for (size_t i = 1; i <= UAV_num_; ++i)
+  {
+    Trajectorys_all_UAV_result_[i]->points.reserve(Waypoint_num_);
+    UAV_all_result_status_[i]->waypoint_time_difference.reserve(Waypoint_num_);
+    UAV_all_result_status_[i]->waypoint_distance_difference.reserve(Waypoint_num_);
+  }
+
+  for (size_t i = 1; i <= UAV_num_; ++i)
+    Trajectorys_all_UAV_flight_plan_[i] = flight_plan[i];
+  SendGoalAllUAV();
 }
 
-void MainControl::send_goal_all_UAV()
+void MainControl::SendGoalAllUAV()
 {
   RCLCPP_INFO(this->get_logger(), "=== 開始派發群飛任務 ===");
-  for (size_t i = 0; i < UAV_num; ++i)
-    send_goal(i);
+  for (size_t i = 1; i <= UAV_num_; ++i)
+    SendGoal(i);
 }
 
-void MainControl::send_goal(int16_t UAV_id)
+void MainControl::SendGoal(int16_t UAV_id)
 {
   FlightAction::Goal flight_plan = FlightAction::Goal();
 
-  flight_plan.trajectory = std::move(*Trajectorys_all_UAV_flight_plan[UAV_id]);
+  flight_plan.trajectory = *Trajectorys_all_UAV_flight_plan_[UAV_id];
   rclcpp_action::Client<FlightAction>::SendGoalOptions send_goal_options = rclcpp_action::Client<FlightAction>::SendGoalOptions();
 
   send_goal_options.goal_response_callback = [this, UAV_id](const FlightGoalHandle::SharedPtr &goal_handle) -> void
   {
-    return this->goal_response_callback(UAV_id, goal_handle);
+    return this->GoalResponseCallback(UAV_id, goal_handle);
   };
 
   send_goal_options.feedback_callback = [this, UAV_id](FlightGoalHandle::SharedPtr, const std::shared_ptr<const FlightAction::Feedback> feedback) -> void
   {
-    return this->feedback_callback(UAV_id, feedback);
+    return this->FeedbackCallback(UAV_id, feedback);
   };
 
   send_goal_options.result_callback = [this, UAV_id](const FlightGoalHandle::WrappedResult &result) -> void
   {
-    return this->result_callback(UAV_id, result);
+    return this->ResultCallback(UAV_id, result);
   };
 
-  Action_clients[UAV_id]->async_send_goal(flight_plan, send_goal_options);
+  Action_clients_[UAV_id]->async_send_goal(flight_plan, send_goal_options);
 }
 
-void MainControl::goal_response_callback(int16_t UAV_id, const FlightGoalHandle::SharedPtr &goal_handle)
+void MainControl::GoalResponseCallback(int16_t UAV_id, const FlightGoalHandle::SharedPtr &goal_handle)
 {
   if (!goal_handle)
     RCLCPP_ERROR(this->get_logger(), "UAV %d Goal was rejected by server", UAV_id);
@@ -86,14 +103,14 @@ void MainControl::goal_response_callback(int16_t UAV_id, const FlightGoalHandle:
     RCLCPP_INFO(this->get_logger(), "UAV %d Goal accepted by server, waiting for result", UAV_id);
 }
 
-void MainControl::feedback_callback(int16_t UAV_id, const std::shared_ptr<const FlightAction::Feedback> feedback)
+void MainControl::FeedbackCallback(int16_t UAV_id, const std::shared_ptr<const FlightAction::Feedback> feedback)
 {
-  Trajectorys_all_UAV_result[UAV_id]->points.push_back(feedback->trajectorypoint);
+  Trajectorys_all_UAV_result_[UAV_id]->points.push_back(feedback->trajectorypoint);
 }
 
-void MainControl::result_callback(int16_t UAV_id, const FlightGoalHandle::WrappedResult &result)
+void MainControl::ResultCallback(int16_t UAV_id, const FlightGoalHandle::WrappedResult &result)
 {
-  UAV_all_result_status[UAV_id] = result.result;
+  UAV_all_result_status_[UAV_id] = result.result;
   switch (result.code)
   {
   case rclcpp_action::ResultCode::SUCCEEDED:
@@ -112,10 +129,10 @@ void MainControl::result_callback(int16_t UAV_id, const FlightGoalHandle::Wrappe
   }
 }
 
-void MainControl::cancel_goal(int16_t UAV_id)
+void MainControl::CancelGoal(int16_t UAV_id)
 {
-  Action_clients[UAV_id]->async_cancel_goal(
-      goal_handles[UAV_id],
+  Action_clients_[UAV_id]->async_cancel_goal(
+      goal_handles_[UAV_id],
       [this, UAV_id](action_msgs::srv::CancelGoal_Response::SharedPtr cancel_response)
       {
         switch (cancel_response->return_code)

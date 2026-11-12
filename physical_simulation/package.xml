@@ -8,6 +8,8 @@
   <license>Apache-2.0</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
+  <buildtool_depend>eigen3_cmake_module</buildtool_depend>
+
 
   <!-- 核心 ROS 2 依賴 -->
   <depend>rclcpp</depend>
@@ -18,6 +20,10 @@
   <depend>nav_msgs</depend>
   <depend>geometry_msgs</depend>
   <depend>custom_interfaces</depend>
+  
+  <!-- PX4訊息與介面依賴 -->
+  <depend>px4_ros2_cpp</depend>
+  <depend>eigen</depend>
 
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>

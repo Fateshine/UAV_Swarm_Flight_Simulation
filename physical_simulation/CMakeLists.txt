@@ -21,6 +21,11 @@ find_package(geometry_msgs REQUIRED)
 # 尋找自定義 Action Package
 find_package(custom_interfaces REQUIRED)
 
+# 尋找 PX4 ROS 2 C++ 介面庫與 Eigen 矩陣運算庫
+find_package(px4_ros2_cpp REQUIRED)
+find_package(eigen3_cmake_module REQUIRED)
+find_package(Eigen3 REQUIRED)
+
 # ==========================================
 # 元件 1 Main Control (Action Client) SHARED 動態函式庫
 # ==========================================
@@ -53,14 +58,20 @@ rclcpp_components_register_node(Main_control_component
 
 # ==========================================
 # 元件 2：UAV Node (Action Server Component) SHARED 動態函式庫
+# 將 PX4 的 Mode 與 Executor 實作檔一起編譯進 UAV_node_component
 # ==========================================
-add_library(UAV_node_component SHARED src/UAV_node.cpp)
+add_library(UAV_node_component SHARED 
+  src/UAV_node.cpp
+  src/PX4_goto_mode.cpp
+  src/PX4_executor.cpp
+)
 
 # 設定標頭檔路徑 (讓 cpp 找得到 hpp)
 # Component 必須使用 PUBLIC 與 Generator Expressions 以供容器正確載入與連結
 target_include_directories(UAV_node_component PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>
+  ${EIGEN3_INCLUDE_DIRS}
 )
 
 # 連結所有需要的依賴包
@@ -71,6 +82,8 @@ ament_target_dependencies(UAV_node_component
   nav_msgs
   geometry_msgs
   custom_interfaces
+  px4_ros2_cpp
+  Eigen3
 )
 
 # 註冊外掛節點
