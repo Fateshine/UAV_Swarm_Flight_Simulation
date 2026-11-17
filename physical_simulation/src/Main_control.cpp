@@ -2,9 +2,152 @@
 
 MainControl::MainControl(const rclcpp::NodeOptions &options) : Node("MainControl", options)
 {
+  ParmInit();
   MemoryInit();
   Ros2MsgInit();
-  ParmInit();
+  // 以下為測試程式碼
+  // start_timer_ = this->create_wall_timer(
+  //     std::chrono::milliseconds(5000), std::bind(&MainControl::SendTestTrajectory, this));
+}
+
+void MainControl::SendTestTrajectory()
+{
+  // 1. 第一時間取消 Timer，確保只執行這一次
+  if (start_timer_)
+    start_timer_->cancel();
+
+  std::vector<nav_msgs::msg::Trajectory::ConstSharedPtr> traj_ptr_all;
+  traj_ptr_all.reserve(UAV_num_ + 1);
+  for (size_t i = 1; i <= UAV_num_; i++)
+  {
+    nav_msgs::msg::Trajectory::ConstSharedPtr traj_ptr = TestTrajectory(this->get_clock()->now(), false);
+    traj_ptr_all.push_back(traj_ptr);
+  }
+  GetFlightPlan(traj_ptr_all);
+}
+
+nav_msgs::msg::Trajectory::ConstSharedPtr MainControl::TestTrajectory(const rclcpp::Time &start_time,
+                                                                      bool variable_speed,
+                                                                      const std::string &frame_id,
+                                                                      double altitude_z)
+{
+  auto traj = std::make_shared<nav_msgs::msg::Trajectory>();
+  traj->header.stamp = start_time;
+  traj->header.frame_id = frame_id;
+
+  constexpr int kNumPoints = 31; // t = 0, 2, ..., 60 s
+  constexpr double kDt = 2.0;    // 路徑點間隔 2 秒
+  constexpr int kSubSteps = 100; // 積分細分步數 (0.02s/step)
+  constexpr double kSubDt = kDt / kSubSteps;
+  constexpr double kMaxYawAmp = 0.6;   // 最大偏航角幅度 ~34.4 deg
+  constexpr double kConstSpeed = 15.0; // 軌跡 A 等速 15.0 m/s
+
+  // 總弧長：等速為 15.0 * 60 = 900.0m；分段變速為 100 + 150 + 225 + 250 + 185 + 85 = 995.0m
+  const double total_length = variable_speed ? 995.0 : 900.0;
+  const double k_wave = 2.0 * M_PI / total_length;
+
+  double x = 0.0;
+  double y = 0.0;
+  double s = 0.0;
+
+  traj->points.reserve(kNumPoints);
+
+  for (int i = 0; i < kNumPoints; ++i)
+  {
+    const double t = i * kDt;
+
+    // 從上一個路徑點積分到當前時間 t
+    if (i > 0)
+    {
+      double t_sub = (i - 1) * kDt;
+      for (int step = 0; step < kSubSteps; ++step)
+      {
+        double v_mid = variable_speed
+                           ? getVariableSpeedProfile(t_sub + 0.5 * kSubDt).first
+                           : kConstSpeed;
+        double s_mid = s + 0.5 * v_mid * kSubDt;
+        double psi_mid = kMaxYawAmp * std::sin(k_wave * s_mid);
+
+        x += v_mid * std::cos(psi_mid) * kSubDt;
+        y += v_mid * std::sin(psi_mid) * kSubDt;
+        s += v_mid * kSubDt;
+        t_sub += kSubDt;
+      }
+    }
+
+    // 計算當前時間 t 的精確運動學狀態
+    auto [v, a_t] = variable_speed
+                        ? getVariableSpeedProfile(t)
+                        : std::make_pair(kConstSpeed, 0.0);
+
+    const double psi = kMaxYawAmp * std::sin(k_wave * s);
+    const double curvature = kMaxYawAmp * k_wave * std::cos(k_wave * s); // d(psi)/ds
+    const double yaw_rate = v * curvature;
+    const double a_normal = v * v * curvature; // 向心加速度
+
+    nav_msgs::msg::TrajectoryPoint pt;
+    pt.header.stamp = start_time + rclcpp::Duration::from_seconds(t);
+    pt.header.frame_id = frame_id;
+
+    // 1. Pose (ENU)
+    pt.pose.position.x = x;
+    pt.pose.position.y = y;
+    pt.pose.position.z = altitude_z;
+    pt.pose.orientation.x = 0.0;
+    pt.pose.orientation.y = 0.0;
+    pt.pose.orientation.z = std::sin(0.5 * psi);
+    pt.pose.orientation.w = std::cos(0.5 * psi);
+
+    // 2. Velocity (世界座標系 map frame)
+    pt.velocity.linear.x = v * std::cos(psi);
+    pt.velocity.linear.y = v * std::sin(psi);
+    pt.velocity.linear.z = 0.0;
+    pt.velocity.angular.x = 0.0;
+    pt.velocity.angular.y = 0.0;
+    pt.velocity.angular.z = yaw_rate;
+
+    // 3. Acceleration (切線加速度 + 向心加速度)
+    pt.acceleration.linear.x = a_t * std::cos(psi) - a_normal * std::sin(psi);
+    pt.acceleration.linear.y = a_t * std::sin(psi) + a_normal * std::cos(psi);
+    pt.acceleration.linear.z = 0.0;
+    pt.acceleration.angular.x = 0.0;
+    pt.acceleration.angular.y = 0.0;
+    pt.acceleration.angular.z = a_t * curvature;
+
+    traj->points.push_back(std::move(pt));
+  }
+
+  return traj;
+}
+
+std::pair<double, double> MainControl::getVariableSpeedProfile(double t)
+{
+  if (t < 10.0)
+    return {10.0, 0.0}; // 0~10s: 等速 10.0 m/s
+
+  else if (t < 20.0)
+  {
+    constexpr double a_t = (20.0 - 10.0) / 10.0; // +1.00 m/s^2
+    return {10.0 + a_t * (t - 10.0), a_t};       // 10~20s: 加速至 20.0 m/s
+  }
+  else if (t < 30.0)
+  {
+    constexpr double a_t = (25.0 - 20.0) / 10.0; // +0.50 m/s^2
+    return {20.0 + a_t * (t - 20.0), a_t};       // 20~30s: 加速至 25.0 m/s
+  }
+  else if (t < 40.0)
+    return {25.0, 0.0}; // 30~40s: 等速 25.0 m/s
+
+  else if (t < 50.0)
+  {
+    constexpr double a_t = (12.0 - 25.0) / 10.0; // -1.30 m/s^2
+    return {25.0 + a_t * (t - 40.0), a_t};       // 40~50s: 減速至 12.0 m/s
+  }
+  else
+  {
+    constexpr double a_t = (5.0 - 12.0) / 10.0; // -0.70 m/s^2
+    return {12.0 + a_t * (t - 50.0), a_t};      // 50~60s: 減速至 5.0 m/s
+  }
 }
 
 void MainControl::ParmInit()
@@ -15,11 +158,16 @@ void MainControl::ParmInit()
 
 void MainControl::MemoryInit()
 {
-  Action_clients_.reserve(UAV_num_ + 1);
-  Trajectorys_all_UAV_flight_plan_.reserve(UAV_num_ + 1);
-  Trajectorys_all_UAV_result_.reserve(UAV_num_ + 1);
-  UAV_all_result_status_.reserve(UAV_num_ + 1);
-  goal_handles_.reserve(UAV_num_ + 1);
+  Action_clients_.resize(UAV_num_ + 1);
+  Trajectorys_all_UAV_flight_plan_.resize(UAV_num_ + 1);
+  Trajectorys_all_UAV_result_.resize(UAV_num_ + 1);
+  UAV_all_result_status_.resize(UAV_num_ + 1);
+  goal_handles_.resize(UAV_num_ + 1);
+  for (size_t i = 1; i <= UAV_num_; ++i)
+  {
+    Trajectorys_all_UAV_result_[i] = std::make_shared<nav_msgs::msg::Trajectory>();
+    UAV_all_result_status_[i] = std::make_shared<custom_interfaces::action::Flight_Result>();
+  }
 }
 
 void MainControl::Ros2MsgInit()
@@ -33,15 +181,17 @@ void MainControl::Ros2MsgInit()
         action_name,
         callback_group_Reentrant_,
         rcl_action_client_get_default_options());
-    Action_clients_.push_back(action_client);
+    Action_clients_[i] = action_client;
   }
 }
 
 void MainControl::GetFlightPlan(std::vector<nav_msgs::msg::Trajectory::ConstSharedPtr> flight_plan)
 {
-  Trajectorys_all_UAV_flight_plan_.clear();
-  Trajectorys_all_UAV_result_.clear();
-  UAV_all_result_status_.clear();
+  // Trajectorys_all_UAV_flight_plan_.clear();
+  // Trajectorys_all_UAV_result_.clear();
+  // UAV_all_result_status_.clear();
+  for (size_t i = 1; i < UAV_num_; ++i)
+    Trajectorys_all_UAV_flight_plan_[i] = std::make_shared<nav_msgs::msg::Trajectory>();
 
   size_t maxLen = 0;
 
@@ -59,13 +209,15 @@ void MainControl::GetFlightPlan(std::vector<nav_msgs::msg::Trajectory::ConstShar
   }
 
   for (size_t i = 1; i <= UAV_num_; ++i)
-    Trajectorys_all_UAV_flight_plan_[i] = flight_plan[i];
+    Trajectorys_all_UAV_flight_plan_[i] = flight_plan[i - 1];
+
   SendGoalAllUAV();
+
+  Trajectorys_all_UAV_flight_plan_.clear();
 }
 
 void MainControl::SendGoalAllUAV()
 {
-  RCLCPP_INFO(this->get_logger(), "=== 開始派發群飛任務 ===");
   for (size_t i = 1; i <= UAV_num_; ++i)
     SendGoal(i);
 }
@@ -93,6 +245,8 @@ void MainControl::SendGoal(int16_t UAV_id)
   };
 
   Action_clients_[UAV_id]->async_send_goal(flight_plan, send_goal_options);
+
+  RCLCPP_INFO(this->get_logger(), "=== 開始派發UAV %d 群飛任務 ===", UAV_id);
 }
 
 void MainControl::GoalResponseCallback(int16_t UAV_id, const FlightGoalHandle::SharedPtr &goal_handle)
@@ -101,16 +255,40 @@ void MainControl::GoalResponseCallback(int16_t UAV_id, const FlightGoalHandle::S
     RCLCPP_ERROR(this->get_logger(), "UAV %d Goal was rejected by server", UAV_id);
   else
     RCLCPP_INFO(this->get_logger(), "UAV %d Goal accepted by server, waiting for result", UAV_id);
+
+  goal_handles_[UAV_id] = goal_handle;
 }
 
 void MainControl::FeedbackCallback(int16_t UAV_id, const std::shared_ptr<const FlightAction::Feedback> feedback)
 {
   Trajectorys_all_UAV_result_[UAV_id]->points.push_back(feedback->trajectorypoint);
+
+  RCLCPP_INFO(this->get_logger(), "UAV %d position %f %f %f, UAV velocity %f %f %f", UAV_id,
+              feedback->trajectorypoint.pose.position.x,
+              feedback->trajectorypoint.pose.position.y,
+              feedback->trajectorypoint.pose.position.z,
+              feedback->trajectorypoint.velocity.linear.x,
+              feedback->trajectorypoint.velocity.linear.y,
+              feedback->trajectorypoint.velocity.linear.z);
 }
 
 void MainControl::ResultCallback(int16_t UAV_id, const FlightGoalHandle::WrappedResult &result)
 {
   UAV_all_result_status_[UAV_id] = result.result;
+
+  RCLCPP_INFO(this->get_logger(), "UAV %d Result %f %f %f %d %f %f %f %s %f %f",
+              UAV_id,
+              UAV_all_result_status_[UAV_id]->final_pose.position.x,
+              UAV_all_result_status_[UAV_id]->final_pose.position.y,
+              UAV_all_result_status_[UAV_id]->final_pose.position.z,
+              UAV_all_result_status_[UAV_id]->has_collision,
+              UAV_all_result_status_[UAV_id]->collision_position.x,
+              UAV_all_result_status_[UAV_id]->collision_position.y,
+              UAV_all_result_status_[UAV_id]->collision_position.z,
+              UAV_all_result_status_[UAV_id]->collided_drone_ids[0].c_str(),
+              UAV_all_result_status_[UAV_id]->waypoint_distance_difference[0],
+              UAV_all_result_status_[UAV_id]->waypoint_time_difference[0]);
+
   switch (result.code)
   {
   case rclcpp_action::ResultCode::SUCCEEDED:

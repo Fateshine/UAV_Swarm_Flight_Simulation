@@ -10,7 +10,7 @@
 
 #include "custom_interfaces/action/flight.hpp"
 
-class MainControl : public rclcpp::Node
+class MainControl final : public rclcpp::Node
 {
 public:
   using FlightAction = custom_interfaces::action::Flight;
@@ -42,6 +42,31 @@ private:
 
   // 回調函數群組
   rclcpp::CallbackGroup::SharedPtr callback_group_Reentrant_;
+  // (測試用)timer
+  rclcpp::TimerBase::SharedPtr start_timer_;
+
+  /**
+   * @brief (測試用)發送軌跡
+   *
+   */
+  void SendTestTrajectory();
+
+  /**
+   * @brief (測試用)軌跡產生器
+   *
+   */
+  nav_msgs::msg::Trajectory::ConstSharedPtr TestTrajectory(const rclcpp::Time &start_time,
+                                                           bool variable_speed,
+                                                           const std::string &frame_id = "map",
+                                                           double altitude_z = 10.0);
+
+  /**
+   * @brief (測試用)計算軌跡 B (5 ~ 25 m/s，每 10 秒切換一次速度狀態) 在時間 t 的 (速度 v, 切線加速度 a_t)
+   *
+   * @param t 時間
+   * @return std::pair<double, double> 速度 v, 切線加速度 a_t
+   */
+  std::pair<double, double> getVariableSpeedProfile(double t);
 
   /**
    * @brief 接收所有參數

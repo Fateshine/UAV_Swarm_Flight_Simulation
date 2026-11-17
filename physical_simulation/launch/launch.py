@@ -22,7 +22,7 @@ def generate_launch_description():
     pkg_name = "physical_simulation"
     pkg_dir = Path(get_package_share_directory(pkg_name))
     # ros_gz_sim_dir = Path(get_package_share_directory("ros_gz_sim"))
-    config_path = pkg_dir / "config" / "swarm_config.yaml"
+    config_path = pkg_dir / "launch" / "Config.yaml"
 
     # 讀取 YAML 檔中的無人機數量
     with open(config_path, "r") as f:
@@ -131,7 +131,7 @@ def generate_launch_description():
         uav_node = ComposableNode(
             package=pkg_name,
             plugin="UAVNode",
-            name=f"uav_{i}",
+            name=f"uav_{px4_instance_id}",
             namespace=f"/px4_{px4_instance_id}",
             parameters=[{"UAV_id": px4_instance_id}, {"use_sim_time": use_sim_time}],
             extra_arguments=[{"use_intra_process_comms": True}],
@@ -147,7 +147,8 @@ def generate_launch_description():
         package="rclcpp_components",
         executable="component_container_mt",
         composable_node_descriptions=composable_nodes,
-        parameters=[{"use_sim_time": True}],
+        parameters=[{"use_sim_time": use_sim_time}],
+        prefix=["gdb -batch -ex run -ex bt --args"],  # GDB 除錯
         output="screen",
     )
 

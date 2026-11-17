@@ -2,9 +2,9 @@
 
 UAVNode::UAVNode(const rclcpp::NodeOptions &options) : Node("UAVNode", options)
 {
+    ParmInit();
     MemoryInit();
     Ros2MsgInit();
-    ParmInit();
 }
 
 void UAVNode::ParmInit()
@@ -15,6 +15,7 @@ void UAVNode::ParmInit()
 
 void UAVNode::MemoryInit()
 {
+    Trajectorys_UAV_result_ = std::make_shared<nav_msgs::msg::Trajectory>();
     UAV_feedback_ = std::make_shared<FlightAction::Feedback>();
     UAV_result_status_ = std::make_shared<FlightAction::Result>();
 
@@ -110,6 +111,60 @@ void UAVNode::HandleAccepted(const std::shared_ptr<FlightGoalHandle> goal_handle
             ExecuteFlight(goal_handle);
         }}
         .detach();
+    // ======================以下為測試用程式碼===============================
+    // std::shared_ptr i = std::make_shared<size_t>(0);
+
+    // _feedback_timer = this->create_wall_timer(
+    //     std::chrono::milliseconds(2000),
+    //     [this, goal_handle, i]()
+    //     {
+    //         // (a) 檢查 Client 是否發送了取消請求
+    //         if (goal_handle->is_canceling())
+    //         {
+    //             if (_feedback_timer)
+    //             {
+    //                 _feedback_timer->cancel();
+    //             }
+    //             // _goto_executor->onDeactivate(px4_ros2::ModeExecutorBase::DeactivateReason::Other);
+    //             goal_handle->canceled(UAV_result_status_);
+    //             return;
+    //         }
+
+    //         // (c) 轉換為 ROS 2 ENU 座標並填入 UAV_feedback_->trajectorypoint
+    //         auto &fb_pt = UAV_feedback_->trajectorypoint;
+    //         fb_pt.header.stamp = this->get_clock()->now();
+    //         fb_pt.header.frame_id = "map";
+
+    //         fb_pt.pose.position.x = Trajectorys_UAV_flight_plan_->points[*i].pose.position.x;
+    //         fb_pt.pose.position.y = Trajectorys_UAV_flight_plan_->points[*i].pose.position.y;
+    //         fb_pt.pose.position.z = Trajectorys_UAV_flight_plan_->points[*i].pose.position.z;
+
+    //         fb_pt.velocity.linear.x = Trajectorys_UAV_flight_plan_->points[*i].velocity.linear.x;
+    //         fb_pt.velocity.linear.y = Trajectorys_UAV_flight_plan_->points[*i].velocity.linear.y;
+    //         fb_pt.velocity.linear.z = Trajectorys_UAV_flight_plan_->points[*i].velocity.linear.z;
+
+    //         // RCLCPP_INFO(this->get_logger(), "[軌跡點 %d] 屬性 %f %f %f %f %f %f", *i, fb_pt.pose.position.x, fb_pt.pose.position.y, fb_pt.pose.position.z, fb_pt.velocity.linear.x, fb_pt.velocity.linear.y, fb_pt.velocity.linear.z);
+
+    //         // (d) 發布 Feedback 給 Action Client
+    //         goal_handle->publish_feedback(UAV_feedback_);
+
+    //         if (*i >= Trajectorys_UAV_flight_plan_->points.size() - 1)
+    //         {
+    //             UAV_result_status_->final_pose.position.x = Trajectorys_UAV_flight_plan_->points[*i].pose.position.x;
+    //             UAV_result_status_->final_pose.position.y = Trajectorys_UAV_flight_plan_->points[*i].pose.position.y;
+    //             UAV_result_status_->final_pose.position.z = Trajectorys_UAV_flight_plan_->points[*i].pose.position.z;
+    //             UAV_result_status_->has_collision = true;
+    //             UAV_result_status_->collision_position.x = 66.5;
+    //             UAV_result_status_->collision_position.y = 77.4;
+    //             UAV_result_status_->collision_position.z = 88.9;
+    //             UAV_result_status_->collided_drone_ids.push_back(std::to_string(6));
+    //             UAV_result_status_->waypoint_distance_difference.push_back(44.8);
+    //             UAV_result_status_->waypoint_time_difference.push_back(21.8);
+    //             goal_handle->succeed(UAV_result_status_);
+    //             _feedback_timer->cancel();
+    //         }
+    //         *i += 1;
+    //     });
 }
 
 void UAVNode::ExecuteFlight(const std::shared_ptr<FlightGoalHandle> goal_handle)
@@ -236,7 +291,7 @@ void UAVNode::ExecuteFlight(const std::shared_ptr<FlightGoalHandle> goal_handle)
     // =========================================================================
     // 5. 啟動 5Hz 非同步 Timer：定期檢查 Cancel 並發布即時遙測 Feedback
     // =========================================================================
-    _feedback_timer = this->create_wall_timer(
+    _feedback_timer = this->create_timer(
         std::chrono::milliseconds(1000), // 1Hz (1000ms)
         [this, goal_handle]()
         {

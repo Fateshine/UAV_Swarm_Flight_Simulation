@@ -7,7 +7,7 @@
 #include "custom_interfaces/action/flight.hpp"
 #include "physical_simulation/PX4_executor.hpp"
 
-class UAVNode : public rclcpp::Node
+class UAVNode final : public rclcpp::Node
 {
 public:
     using FlightAction = custom_interfaces::action::Flight;
