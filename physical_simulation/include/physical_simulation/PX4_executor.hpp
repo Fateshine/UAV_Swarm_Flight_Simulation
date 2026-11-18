@@ -18,6 +18,7 @@ public:
     enum class State
     {
         Reset,             // 初始/重置狀態
+        Arming,            // 先解鎖
         TakingOff,         // 自動起飛 (透過 PX4 內部指令)
         MyMode,            // 排程執行 MyGotoMode (會飛完所有 Waypoints)
         RTL,               // 返航模式

@@ -9,13 +9,15 @@ UAVNode::UAVNode(const rclcpp::NodeOptions &options) : Node("UAVNode", options)
 
 void UAVNode::ParmInit()
 {
-    this->declare_parameter<int>("UAV_id");
+    rcl_interfaces::msg::ParameterDescriptor param_desc = rcl_interfaces::msg::ParameterDescriptor{};
+    param_desc.description = "The UAV's unique identifier starts with 1 to match the flight control system.";
+    param_desc.read_only = true;
+    this->declare_parameter<int>("UAV_id", param_desc);
     UAV_ID_ = static_cast<uint16_t>(this->get_parameter("UAV_id").as_int());
 }
 
 void UAVNode::MemoryInit()
 {
-    Trajectorys_UAV_result_ = std::make_shared<nav_msgs::msg::Trajectory>();
     UAV_feedback_ = std::make_shared<FlightAction::Feedback>();
     UAV_result_status_ = std::make_shared<FlightAction::Result>();
 
@@ -23,23 +25,24 @@ void UAVNode::MemoryInit()
     _goto_mode = std::make_unique<MyGotoMode>(*this);
     _goto_executor = std::make_unique<MyGotoExecutor>(*_goto_mode, true);
 
-    // 2. 等待底層 PX4 準備好 (Timeout 設為 10 秒，可依需求調整)
+    // 2. 等待底層 PX4 準備好 (Timeout 設為 15 秒，可依需求調整)
     // 這行會去檢查 /px4_i/fmu/out/vehicle_status 是否有心跳訊號
     if (!px4_ros2::waitForFMU(*this,
-                              std::chrono::seconds(10), // discovery_timeout
-                              std::chrono::seconds(10), // heartbeat_timeout
+                              std::chrono::seconds(15), // discovery_timeout
+                              std::chrono::seconds(15), // heartbeat_timeout
                               ""))                      // prefix
     {
         RCLCPP_FATAL(this->get_logger(), "[UAV %d] 等待 PX4 FMU 連線超時！請檢查 SITL 與 MicroXRCEAgent 是否正常運作。", UAV_ID_);
         throw std::runtime_error("Timeout waiting for PX4 FMU connection");
     }
 
-    // 3. 向 PX4 註冊我們的 Executor
+    // 3. 向 PX4 註冊 Executor
     if (!_goto_executor->doRegister())
     {
         RCLCPP_FATAL(this->get_logger(), "[UAV %d] 註冊 MyGotoExecutor 失敗！", UAV_ID_);
         throw std::runtime_error("ModeExecutor registration failed");
     }
+    mode_id = _goto_executor->ownedMode().id();
 }
 
 void UAVNode::Ros2MsgInit()
@@ -69,6 +72,10 @@ void UAVNode::Ros2MsgInit()
         },
         rcl_action_server_get_default_options(),
         callback_group_Reentrant_);
+
+    //  建立 PX4 指令Publisher
+    _vehicle_command_pub = this->create_publisher<px4_msgs::msg::VehicleCommand>(
+        "/px4_1/fmu/in/vehicle_command_v1", 10);
 }
 
 rclcpp_action::GoalResponse UAVNode::HandleGoal(const rclcpp_action::GoalUUID &uuid, FlightAction::Goal::ConstSharedPtr goal)
@@ -86,7 +93,7 @@ rclcpp_action::GoalResponse UAVNode::HandleGoal(const rclcpp_action::GoalUUID &u
     Trajectorys_UAV_flight_plan_ = std::shared_ptr<const nav_msgs::msg::Trajectory>(goal, &(goal->trajectory));
 
     Waypoint_num_ = Trajectorys_UAV_flight_plan_->points.size();
-    Trajectorys_UAV_result_->points.reserve(Waypoint_num_);
+    UAV_result_status_->trajectoryresult.points.reserve(Waypoint_num_);
 
     return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
 }
@@ -181,7 +188,7 @@ void UAVNode::ExecuteFlight(const std::shared_ptr<FlightGoalHandle> goal_handle)
     UAV_result_status_->waypoint_distance_difference.reserve(Waypoint_num_);
 
     // 確保模擬器結果陣列大小對齊航點數量
-    Trajectorys_UAV_result_->points.resize(Waypoint_num_);
+    UAV_result_status_->trajectoryresult.points.resize(Waypoint_num_);
 
     // =========================================================================
     // 2. 座標與時間轉換：nav_msgs::msg::TrajectoryPoint (ENU) -> WaypointTask (NED)
@@ -231,7 +238,7 @@ void UAVNode::ExecuteFlight(const std::shared_ptr<FlightGoalHandle> goal_handle)
         [this, goal_handle](px4_ros2::Result px4_result,
                             const std::vector<WaypointTelemetryReport> &reports)
         {
-            // (a) 停止 5Hz Feedback Timer
+            // (a) 停止 Feedback Timer
             if (_feedback_timer)
             {
                 _feedback_timer->cancel();
@@ -244,7 +251,7 @@ void UAVNode::ExecuteFlight(const std::shared_ptr<FlightGoalHandle> goal_handle)
                 const auto &rep = reports[i];
 
                 // 將抵達瞬間的實際位置與速度由 PX4 (NED) 轉回 ROS 2 (ENU) 存入結果陣列
-                auto &res_pt = Trajectorys_UAV_result_->points[i];
+                auto &res_pt = UAV_result_status_->trajectoryresult.points[i];
                 res_pt.pose.position.x = rep.actual_position_ned_m.y();  // East  = NED_Y
                 res_pt.pose.position.y = rep.actual_position_ned_m.x();  // North = NED_X
                 res_pt.pose.position.z = -rep.actual_position_ned_m.z(); // Up    = -NED_Z
@@ -265,6 +272,23 @@ void UAVNode::ExecuteFlight(const std::shared_ptr<FlightGoalHandle> goal_handle)
                 UAV_result_status_->waypoint_distance_difference.push_back(
                     rep.position_error_norm_m);
             }
+
+            // 計算平均絕對時間和距離誤差
+            const auto &time_diffs = UAV_result_status_->waypoint_time_difference;
+            const double sum = std::transform_reduce(
+                time_diffs.begin(), time_diffs.end(), 0.0, std::plus<>(),
+                [](double val)
+                { return std::fabs(val); });
+            UAV_result_status_->waypoint_time_difference_all =
+                time_diffs.empty() ? 0.0 : (sum / static_cast<double>(time_diffs.size()));
+
+            const auto &dist_diffs = UAV_result_status_->waypoint_distance_difference;
+            const double sum2 = std::transform_reduce(
+                dist_diffs.begin(), dist_diffs.end(), 0.0, std::plus<>(),
+                [](double val)
+                { return std::fabs(val); });
+            UAV_result_status_->waypoint_distance_difference_all =
+                dist_diffs.empty() ? 0.0 : (sum2 / static_cast<double>(dist_diffs.size()));
 
             // (c) 檢查是否因 Client 取消而結束
             if (goal_handle->is_canceling())
@@ -289,7 +313,7 @@ void UAVNode::ExecuteFlight(const std::shared_ptr<FlightGoalHandle> goal_handle)
         });
 
     // =========================================================================
-    // 5. 啟動 5Hz 非同步 Timer：定期檢查 Cancel 並發布即時遙測 Feedback
+    // 5. 啟動 非同步 Timer：定期檢查 Cancel 並發布即時遙測 Feedback
     // =========================================================================
     _feedback_timer = this->create_timer(
         std::chrono::milliseconds(1000), // 1Hz (1000ms)
@@ -324,14 +348,34 @@ void UAVNode::ExecuteFlight(const std::shared_ptr<FlightGoalHandle> goal_handle)
             fb_pt.velocity.linear.y = curr_vel_ned.x();
             fb_pt.velocity.linear.z = -curr_vel_ned.z();
 
-            // (d) 發布 Feedback 給 Action Client (DDQN)
+            // (d) 發布 Feedback 給 Action Client
             goal_handle->publish_feedback(UAV_feedback_);
         });
 
     // =========================================================================
     // 6. 啟動 PX4 Executor 狀態機 (非阻塞，立即返回並釋放 Thread)
     // =========================================================================
-    _goto_executor->onActivate();
+    PX4StartFlight();
+}
+
+void UAVNode::PX4StartFlight()
+{
+    px4_msgs::msg::VehicleCommand cmd{};
+    cmd.timestamp = 0;
+    cmd.command = px4_msgs::msg::VehicleCommand::VEHICLE_CMD_SET_NAV_STATE;
+    cmd.param1 = static_cast<float>(mode_id);
+    cmd.param2 = 0.0f;
+    cmd.param3 = 0.0f;
+
+    // 因為 topic 已隔離在 /px4_1/... 下，target_system 設 0 (廣播) 可避免多機 ID 不符被忽略
+    cmd.target_system = 0;
+    cmd.target_component = 1;
+    cmd.source_system = 1;
+    cmd.source_component = 1;
+    cmd.from_external = true;
+
+    _vehicle_command_pub->publish(cmd);
+    RCLCPP_INFO(this->get_logger(), "已發送切模式指令，等待 PX4 進入 onActivate()...");
 }
 
 RCLCPP_COMPONENTS_REGISTER_NODE(UAVNode)

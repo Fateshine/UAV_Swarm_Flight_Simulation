@@ -8,6 +8,7 @@ from launch import LaunchDescription
 from launch.actions import (
     AppendEnvironmentVariable,
     ExecuteProcess,
+    SetEnvironmentVariable,
     TimerAction,
 )
 from launch_ros.actions import ComposableNodeContainer, Node
@@ -35,6 +36,7 @@ def generate_launch_description():
     px4_bin = px4_dir / "build" / "px4_sitl_default" / "bin" / "px4"
     gz_models_dir = px4_dir / "Tools" / "simulation" / "gz" / "models"
     gz_worlds_dir = px4_dir / "Tools" / "simulation" / "gz" / "worlds"
+    gz_server_config = px4_dir / "Tools" / "simulation" / "gz" / "server.config"
     world_file = gz_worlds_dir / "default.sdf"
 
     launch_actions = []
@@ -46,6 +48,13 @@ def generate_launch_description():
         name="GZ_SIM_RESOURCE_PATH", value=f"{gz_models_dir}:{gz_worlds_dir}"
     )
     launch_actions.append(set_gz_models)
+
+    # 指定 PX4 的 Gazebo 設定檔，讓模擬器載入 IMU、氣壓計、GPS 等感測器外掛
+    set_gz_config = SetEnvironmentVariable(
+        name="GZ_SIM_SERVER_CONFIG_PATH",
+        value=str(gz_server_config),
+    )
+    launch_actions.append(set_gz_config)
 
     # =========================================================================
     # 3. 啟動 Gazebo Harmonic 使用 GzServer 模式
@@ -111,6 +120,21 @@ def generate_launch_description():
             "default"  # 必須與 world_file 內的 <world name="..."> 一致
         )
         px4_env["PX4_GZ_MODEL_POSE"] = f"{spawn_x},{spawn_y},0.0,0.0,0.0,0.0"
+        px4_env["PX4_UXRCE_DDS_NS"] = f"px4_{px4_instance_id}"
+
+        px4_env["PX4_PARAM_COM_RCL_EXCEPT"] = (
+            "4"  # 允許外部/Offboard 模式在無遙控器時解鎖
+        )
+        px4_env["PX4_PARAM_NAV_DLL_ACT"] = (
+            "0"  # 關閉資料鏈路失聯檢查，避免無 QGC 擋住起飛前檢查
+        )
+        px4_env["PX4_PARAM_CBRK_SUPPLY_CHK"] = (
+            "894281"  # 跳過實體供電檢查，解決 system power unavailable
+        )
+        # 以下暫時使用，之後用真實數據
+        px4_env["PX4_PARAM_MPC_XY_VEL_MAX"] = "18.0"
+        px4_env["PX4_PARAM_MPC_ACC_HOR"] = "7.0"
+        px4_env["PX4_PARAM_MPC_JERK_AUTO"] = "15.0"
 
         px4_sitl_process = ExecuteProcess(
             cmd=[
@@ -148,7 +172,7 @@ def generate_launch_description():
         executable="component_container_mt",
         composable_node_descriptions=composable_nodes,
         parameters=[{"use_sim_time": use_sim_time}],
-        prefix=["gdb -batch -ex run -ex bt --args"],  # GDB 除錯
+        # prefix=["gdb -batch -ex run -ex bt --args"],  # GDB 除錯
         output="screen",
     )
 

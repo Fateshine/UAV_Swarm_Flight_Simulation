@@ -10,6 +10,7 @@
 #include <px4_ros2/odometry/attitude.hpp>
 #include <px4_ros2/odometry/local_position.hpp>
 #include <px4_ros2/utils/geometry.hpp>
+#include <px4_ros2/control/setpoint_types/experimental/trajectory.hpp>
 #include <rclcpp/rclcpp.hpp>
 
 using namespace px4_ros2::literals; // NOLINT
@@ -140,7 +141,7 @@ private:
 
     //  ================= PX4 官方介面：負責發送 Goto 指令與接收遙測  =================
     // 用來發送「飛往特定全域座標 (Global Position)」的指令。
-    std::shared_ptr<px4_ros2::MulticopterGotoSetpointType> _goto_setpoint;
+    std::shared_ptr<px4_ros2::TrajectorySetpointType> _trajectory_setpoint;
     // 用來讀取無人機當前的經緯度與高度。
     std::shared_ptr<px4_ros2::OdometryLocalPosition> _vehicle_local_position;
     // 用來讀取無人機當前的姿態（包含機頭朝向 Yaw）。
@@ -165,7 +166,7 @@ private:
     float _max_vertical_velocity_m_s{1.5f};
 
     // 物理閾值與補償常數
-    static constexpr float kPositionErrorThreshold = 0.3f;   // 進入此半徑視為「抵達」 [m]
+    static constexpr float kPositionErrorThreshold = 1.5f;   // 進入此半徑視為「抵達」 [m]
     static constexpr float kHeadingErrorThreshold = 7.0_deg; // 誤差為7deg以下即視為成功朝向
     static constexpr float kRampCompensation = 1.20f;        // 補償起步加速與抵達前減速耗損的時間
 };

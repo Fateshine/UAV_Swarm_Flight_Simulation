@@ -3,12 +3,15 @@ nav_msgs/Trajectory trajectory          # 使用軌跡訊息
 
 ---
 # 2. Result
-geometry_msgs/Pose final_pose           # 最終停止的位置與朝向
-bool has_collision                      # 是否發生碰撞
-geometry_msgs/Point collision_position  # 碰撞發生的具體位
-string[] collided_drone_ids             # 與之碰撞的無人機 ID
-float64[] waypoint_time_difference      # 抵達軌跡中每個點的時間誤差 (秒)
-float64[] waypoint_distance_difference  # 抵達軌跡中每個點的空間誤差 (公尺)
+geometry_msgs/Pose final_pose            # 最終停止的位置與朝向
+bool has_collision                       # 是否發生碰撞
+geometry_msgs/Point collision_position   # 碰撞發生的具體位
+string[] collided_drone_ids              # 與之碰撞的無人機 ID
+float64[] waypoint_time_difference       # 抵達軌跡中每個點的時間誤差 (秒)
+float64[] waypoint_distance_difference   # 抵達軌跡中每個點的空間誤差 (公尺)
+float64 waypoint_time_difference_all     # 抵達軌跡中每個點的時間平均誤差 (秒)
+float64 waypoint_distance_difference_all # 抵達軌跡中每個點的空間平均誤差 (公尺)
+nav_msgs/Trajectory trajectoryresult     # 無人機最終路徑詳細結果 
 
 ---
 # 3. Feedback

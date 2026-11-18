@@ -1,8 +1,11 @@
 #pragma once
 
+#include <numeric>
+
 #include <rclcpp_action/rclcpp_action.hpp>
 #include <rclcpp_components/register_node_macro.hpp>
 #include <px4_ros2/components/wait_for_fmu.hpp>
+#include <px4_msgs/msg/vehicle_command.hpp>
 
 #include "custom_interfaces/action/flight.hpp"
 #include "physical_simulation/PX4_executor.hpp"
@@ -32,11 +35,9 @@ private:
     uint16_t Waypoint_num_;
     // 無人機的飛行計畫 (格式詳情參閱 https://docs.ros.org/en/jazzy/p/nav_msgs/msg/Trajectory.html)
     nav_msgs::msg::Trajectory::ConstSharedPtr Trajectorys_UAV_flight_plan_;
-    // 無人機的模擬飛行結果 (格式詳情參閱 https://docs.ros.org/en/jazzy/p/nav_msgs/msg/Trajectory.html)
-    nav_msgs::msg::Trajectory::SharedPtr Trajectorys_UAV_result_;
     // 當前的無人機狀態 (格式詳情參閱 https://docs.ros.org/en/jazzy/p/nav_msgs/msg/TrajectoryPoint.html)
     FlightAction::Feedback::SharedPtr UAV_feedback_;
-    // 無人機的飛行結果狀態 (格式詳情參閱 ros2_ws/src/custom_interfaces/action/Flight.action)
+    // 無人機的飛行結果及狀態 (格式詳情參閱 ros2_ws/src/custom_interfaces/action/Flight.action)
     FlightAction::Result::SharedPtr UAV_result_status_;
 
     // 回調函數群組
@@ -44,6 +45,10 @@ private:
     // 用來在背景定時發送 Feedback
     rclcpp::TimerBase::SharedPtr _feedback_timer;
 
+    // 發送PX4指令topic
+    rclcpp::Publisher<px4_msgs::msg::VehicleCommand>::SharedPtr _vehicle_command_pub;
+    // Px4 id
+    uint8_t mode_id;
     // 內部自訂義 PX4 class
     std::unique_ptr<MyGotoMode> _goto_mode;
     // 內部自訂義 PX4 class
@@ -97,4 +102,6 @@ private:
      * @param goal_handle 用於追蹤、控制和更新一個特定 Action Goal 的生命週期狀態
      */
     void ExecuteFlight(const std::shared_ptr<FlightGoalHandle> goal_handle);
+
+    void PX4StartFlight();
 };
