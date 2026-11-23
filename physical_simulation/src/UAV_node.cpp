@@ -361,18 +361,18 @@ void UAVNode::ExecuteFlight(const std::shared_ptr<FlightGoalHandle> goal_handle)
 void UAVNode::PX4StartFlight()
 {
     px4_msgs::msg::VehicleCommand cmd{};
-    cmd.timestamp = 0;
-    cmd.command = px4_msgs::msg::VehicleCommand::VEHICLE_CMD_SET_NAV_STATE;
+    cmd.timestamp = 0;                                                      // 使用Gazebo 模擬時間
+    cmd.command = px4_msgs::msg::VehicleCommand::VEHICLE_CMD_SET_NAV_STATE; // 用來直接切換 PX4 的內部狀態機
     cmd.param1 = static_cast<float>(mode_id);
     cmd.param2 = 0.0f;
     cmd.param3 = 0.0f;
 
     // 因為 topic 已隔離在 /px4_1/... 下，target_system 設 0 (廣播) 可避免多機 ID 不符被忽略
-    cmd.target_system = 0;
-    cmd.target_component = 1;
-    cmd.source_system = 1;
+    cmd.target_system = 0;    // Broadcast 模式，已用namespace將通訊通道分開
+    cmd.target_component = 1; // 指定目標組件 ID 1代表飛控主程式本身。
+    cmd.source_system = 1;    // 標示發送端（機載電腦或地面站）的系統與組件 ID，供 PX4 回傳執行結果（VehicleCommandAck）時辨識來源。
     cmd.source_component = 1;
-    cmd.from_external = true;
+    cmd.from_external = true; // 指令來自飛控外部（ROS 2 node）
 
     _vehicle_command_pub->publish(cmd);
     RCLCPP_INFO(this->get_logger(), "已發送切模式指令，等待 PX4 進入 onActivate()...");

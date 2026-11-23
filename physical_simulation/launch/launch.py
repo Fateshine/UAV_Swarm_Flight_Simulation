@@ -1,7 +1,9 @@
+import logging
 import math
 import os
 from pathlib import Path
 
+import launch.logging
 import yaml
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
@@ -37,7 +39,7 @@ def generate_launch_description():
     gz_models_dir = px4_dir / "Tools" / "simulation" / "gz" / "models"
     gz_worlds_dir = px4_dir / "Tools" / "simulation" / "gz" / "worlds"
     gz_server_config = px4_dir / "Tools" / "simulation" / "gz" / "server.config"
-    world_file = gz_worlds_dir / "default.sdf"
+    world_file = gz_worlds_dir / "default_simplify.sdf"
 
     launch_actions = []
 
@@ -81,7 +83,7 @@ def generate_launch_description():
     # 4. 啟動 Micro-XRCE-DDS Agent (負責 uORB <-> ROS 2 DDS 橋接)
     # =========================================================================
     xrce_agent_process = ExecuteProcess(
-        cmd=["MicroXRCEAgent", "udp4", "-p", "8888"],
+        cmd=["MicroXRCEAgent", "udp4", "-p", "8888", "-v", "3"],
         name="micro_xrce_agent",
         output="screen",
     )
@@ -116,12 +118,14 @@ def generate_launch_description():
         px4_env["PX4_SYS_AUTOSTART"] = "4001"
         px4_env["PX4_SIM_MODEL"] = "gz_x500"
         px4_env["PX4_GZ_STANDALONE"] = "1"  # 告知 PX4 使用已由 ros_gz_sim 啟動的 Gazebo
+        px4_env["PX4_GZ_NO_FOLLOW"] = "1"  # 關閉相機跟隨
         px4_env["PX4_GZ_WORLD"] = (
-            "default"  # 必須與 world_file 內的 <world name="..."> 一致
+            "default_simplify"  # 必須與 world_file 內的 <world name="..."> 一致
         )
-        px4_env["PX4_GZ_MODEL_POSE"] = f"{spawn_x},{spawn_y},0.0,0.0,0.0,0.0"
+        px4_env["PX4_GZ_MODEL_POSE"] = (
+            f"{spawn_x},{spawn_y},0.0,0.0,0.0,0.0"  # 初始生成位置
+        )
         px4_env["PX4_UXRCE_DDS_NS"] = f"px4_{px4_instance_id}"
-
         px4_env["PX4_PARAM_COM_RCL_EXCEPT"] = (
             "4"  # 允許外部/Offboard 模式在無遙控器時解鎖
         )
@@ -131,6 +135,7 @@ def generate_launch_description():
         px4_env["PX4_PARAM_CBRK_SUPPLY_CHK"] = (
             "894281"  # 跳過實體供電檢查，解決 system power unavailable
         )
+        px4_env["PX4_PARAM_SDLOG_MODE"] = "-1"  # 關閉飛行紀錄檔
         # 以下暫時使用，之後用真實數據
         px4_env["PX4_PARAM_MPC_XY_VEL_MAX"] = "18.0"
         px4_env["PX4_PARAM_MPC_ACC_HOR"] = "7.0"
@@ -172,9 +177,15 @@ def generate_launch_description():
         executable="component_container_mt",
         composable_node_descriptions=composable_nodes,
         parameters=[{"use_sim_time": use_sim_time}],
+        ros_arguments=[
+            "--disable-external-lib-logs",  # 關閉節點寫入 .log 檔（不影響終端機輸出）
+            "--disable-rosout-logs",  # 關閉 /rosout 廣播，省 DDS 負擔
+        ],
         # prefix=["gdb -batch -ex run -ex bt --args"],  # GDB 除錯
         output="screen",
     )
+
+    launch.logging.launch_config.level = logging.INFO  # Ros2 log 只顯示INFO等級以上訊息
 
     delayed_container = TimerAction(period=5.0, actions=[container])
     launch_actions.append(delayed_container)

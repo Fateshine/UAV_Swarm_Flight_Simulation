@@ -142,7 +142,7 @@ void MainControl::ResultCallback(int16_t UAV_id, const FlightGoalHandle::Wrapped
 {
   UAV_all_result_status_[UAV_id] = result.result;
 
-  RCLCPP_INFO(this->get_logger(), "UAV %d Result 平均距離誤差: %f 平均時間誤差: %f",
+  RCLCPP_INFO(this->get_logger(), "UAV %d Result 平均距離誤差: %f 公尺 平均時間誤差: %f 秒",
               UAV_id,
               UAV_all_result_status_[UAV_id]->waypoint_distance_difference_all,
               UAV_all_result_status_[UAV_id]->waypoint_time_difference_all);
