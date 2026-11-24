@@ -5,6 +5,7 @@ UAVNode::UAVNode(const rclcpp::NodeOptions &options) : Node("UAVNode", options)
     ParmInit();
     MemoryInit();
     Ros2MsgInit();
+    initPX4Connection();
 }
 
 void UAVNode::ParmInit()
@@ -25,24 +26,24 @@ void UAVNode::MemoryInit()
     _goto_mode = std::make_unique<MyGotoMode>(*this);
     _goto_executor = std::make_unique<MyGotoExecutor>(*_goto_mode, true);
 
-    // 2. 等待底層 PX4 準備好 (Timeout 設為 15 秒，可依需求調整)
-    // 這行會去檢查 /px4_i/fmu/out/vehicle_status 是否有心跳訊號
-    if (!px4_ros2::waitForFMU(*this,
-                              std::chrono::seconds(15), // discovery_timeout
-                              std::chrono::seconds(15), // heartbeat_timeout
-                              ""))                      // prefix
-    {
-        RCLCPP_FATAL(this->get_logger(), "[UAV %d] 等待 PX4 FMU 連線超時！請檢查 SITL 與 MicroXRCEAgent 是否正常運作。", UAV_ID_);
-        throw std::runtime_error("Timeout waiting for PX4 FMU connection");
-    }
+    // // 2. 等待底層 PX4 準備好 (Timeout 設為 15 秒，可依需求調整)
+    // // 這行會去檢查 /px4_i/fmu/out/vehicle_status 是否有心跳訊號
+    // if (!px4_ros2::waitForFMU(*this,
+    //                           std::chrono::seconds(15), // discovery_timeout
+    //                           std::chrono::seconds(15), // heartbeat_timeout
+    //                           ""))                      // prefix
+    // {
+    //     RCLCPP_FATAL(this->get_logger(), "[UAV %d] 等待 PX4 FMU 連線超時！請檢查 SITL 與 MicroXRCEAgent 是否正常運作。", UAV_ID_);
+    //     throw std::runtime_error("Timeout waiting for PX4 FMU connection");
+    // }
 
-    // 3. 向 PX4 註冊 Executor
-    if (!_goto_executor->doRegister())
-    {
-        RCLCPP_FATAL(this->get_logger(), "[UAV %d] 註冊 MyGotoExecutor 失敗！", UAV_ID_);
-        throw std::runtime_error("ModeExecutor registration failed");
-    }
-    mode_id = _goto_executor->ownedMode().id();
+    // // 3. 向 PX4 註冊 Executor
+    // if (!_goto_executor->doRegister())
+    // {
+    //     RCLCPP_FATAL(this->get_logger(), "[UAV %d] 註冊 MyGotoExecutor 失敗！", UAV_ID_);
+    //     throw std::runtime_error("ModeExecutor registration failed");
+    // }
+    // mode_id = _goto_executor->ownedMode().id();
 }
 
 void UAVNode::Ros2MsgInit()
@@ -73,9 +74,93 @@ void UAVNode::Ros2MsgInit()
         rcl_action_server_get_default_options(),
         callback_group_Reentrant_);
 
+    // 建立傳送 ready 給 main control 的 publisher
+    rclcpp::QoS ready_qos(1);
+    ready_qos.reliability(rclcpp::ReliabilityPolicy::Reliable);
+    ready_qos.durability(rclcpp::DurabilityPolicy::TransientLocal);
+    ready_pub_ = this->create_publisher<std_msgs::msg::UInt16>("/swarm/uav_ready", ready_qos);
+
     //  建立 PX4 指令Publisher
-    _vehicle_command_pub = this->create_publisher<px4_msgs::msg::VehicleCommand>(
-        "/px4_1/fmu/in/vehicle_command_v1", 10);
+    std::string Publish_name = "/px4_" + std::to_string(UAV_ID_) + "/fmu/in/vehicle_command";
+    _vehicle_command_pub = this->create_publisher<px4_msgs::msg::VehicleCommand>(Publish_name, 10);
+
+    // 2. 監控 pre_flight_checks_pass，搭配 doRegister() 結果決定是否廣播就緒
+    std::string Sub_name = "/px4_" + std::to_string(UAV_ID_) + "/fmu/out/vehicle_status_v4";
+    status_sub_ = this->create_subscription<px4_msgs::msg::VehicleStatus>(
+        Sub_name, rclcpp::SensorDataQoS(),
+        [this](const px4_msgs::msg::VehicleStatus::SharedPtr msg)
+        {
+            if (!status_sub_)
+                return;
+
+            if (mode_registered_.load(std::memory_order_acquire) && msg->pre_flight_checks_pass)
+            {
+                std_msgs::msg::UInt16 ready_msg;
+                ready_msg.data = static_cast<uint16_t>(UAV_ID_);
+                ready_pub_->publish(ready_msg);
+
+                RCLCPP_INFO(this->get_logger(),
+                            "[UAV %d] 起飛前檢查通過，已廣播就緒訊號至 /swarm/uav_ready", UAV_ID_);
+
+                status_sub_.reset(); // 關閉Subscription
+            }
+        });
+}
+
+void UAVNode::initPX4Connection()
+{
+    // 1. 分段等待 FMU（總上限 60 秒；拆成每次 5 秒可讓 Ctrl+C 迅速中止）
+    constexpr int kMaxWaitAttempts = 12;
+    bool fmu_ready = false;
+    for (size_t attempt = 1; attempt <= kMaxWaitAttempts && rclcpp::ok(); ++attempt)
+    {
+        if (px4_ros2::waitForFMU(*this,
+                                 std::chrono::seconds(5),
+                                 std::chrono::seconds(5),
+                                 ""))
+        {
+            fmu_ready = true;
+            break;
+        }
+        RCLCPP_WARN(this->get_logger(),
+                    "[UAV %d] 等待 PX4 FMU 中 嘗試次數(%d/%d)...", UAV_ID_, attempt, kMaxWaitAttempts);
+    }
+
+    if (!fmu_ready)
+    {
+        RCLCPP_FATAL(this->get_logger(), "[UAV %d] 等待 PX4 FMU 連線超時！", UAV_ID_);
+        return;
+    }
+
+    // 2. 向 PX4 註冊 Executor（多機高負載下加上重試）
+    constexpr int kMaxRegAttempts = 5;
+    bool registered = false;
+    for (size_t attempt = 1; attempt <= kMaxRegAttempts && rclcpp::ok(); ++attempt)
+    {
+        if (_goto_executor->doRegister())
+        {
+            registered = true;
+            break;
+        }
+        RCLCPP_WARN(this->get_logger(),
+                    "[UAV %d] 註冊 MyGotoExecutor 失敗，即將重試，嘗試次數 (%d/%d)...",
+                    UAV_ID_, attempt, kMaxRegAttempts);
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    }
+
+    if (!registered)
+    {
+        RCLCPP_FATAL(this->get_logger(), "[UAV %d] 註冊 MyGotoExecutor 最終失敗！", UAV_ID_);
+        return;
+    }
+
+    // 3. 取得 mode_id 後才立起旗標，讓 status_sub_ 在 pre_flight_checks_pass 時發送 ready
+    mode_id = _goto_executor->ownedMode().id();
+    mode_registered_.store(true, std::memory_order_release);
+
+    RCLCPP_INFO(this->get_logger(),
+                "[UAV %d] MyGotoExecutor 註冊成功 (mode_id=%d)，等待起飛前檢查通過...",
+                UAV_ID_, mode_id);
 }
 
 rclcpp_action::GoalResponse UAVNode::HandleGoal(const rclcpp_action::GoalUUID &uuid, FlightAction::Goal::ConstSharedPtr goal)
@@ -91,6 +176,7 @@ rclcpp_action::GoalResponse UAVNode::HandleGoal(const rclcpp_action::GoalUUID &u
     }
 
     Trajectorys_UAV_flight_plan_ = std::shared_ptr<const nav_msgs::msg::Trajectory>(goal, &(goal->trajectory));
+    start_time_ = goal->start_time;
 
     Waypoint_num_ = Trajectorys_UAV_flight_plan_->points.size();
     UAV_result_status_->trajectoryresult.points.reserve(Waypoint_num_);
@@ -355,7 +441,29 @@ void UAVNode::ExecuteFlight(const std::shared_ptr<FlightGoalHandle> goal_handle)
     // =========================================================================
     // 6. 啟動 PX4 Executor 狀態機 (非阻塞，立即返回並釋放 Thread)
     // =========================================================================
-    PX4StartFlight();
+    rclcpp::Time last_cmd_time_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
+    _start_timer = this->create_timer(
+        std::chrono::milliseconds(50),
+        [this, &last_cmd_time_]()
+        {
+            // 檢查 Executor 實例是否已取得控制權（進入 onActivate）
+            if (_goto_executor->isInCharge())
+            {
+                _start_timer->cancel();
+                return;
+            }
+            const rclcpp::Time now = this->now();
+            if (now < start_time_)
+            {
+                return; // 尚未到共同起飛時間戳
+            }
+            // 到點後每 300ms 重發一次切模式指令，直到 isInCharge() 變 true
+            if (last_cmd_time_.nanoseconds() == 0 || (now - last_cmd_time_).seconds() >= 0.3)
+            {
+                last_cmd_time_ = now;
+                PX4StartFlight();
+            }
+        });
 }
 
 void UAVNode::PX4StartFlight()

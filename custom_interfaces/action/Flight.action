@@ -1,5 +1,6 @@
 # 1. Request (Goal)
 nav_msgs/Trajectory trajectory          # 使用軌跡訊息
+builtin_interfaces/Time start_time      # 機群開始模擬時間
 
 ---
 # 2. Result

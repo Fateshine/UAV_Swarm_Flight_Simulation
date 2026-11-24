@@ -1,9 +1,12 @@
 #pragma once
 
 #include <numeric>
+#include <atomic>
+#include <thread>
 
 #include <rclcpp_action/rclcpp_action.hpp>
 #include <rclcpp_components/register_node_macro.hpp>
+#include <std_msgs/msg/u_int16.hpp>
 #include <px4_ros2/components/wait_for_fmu.hpp>
 #include <px4_msgs/msg/vehicle_command.hpp>
 
@@ -25,10 +28,6 @@ public:
     virtual ~UAVNode() override = default;
 
 private:
-    // 無人機的 Action server
-    rclcpp_action::Server<FlightAction>::SharedPtr Action_servers_;
-    // 無人機的 Action client 號碼牌
-    std::shared_ptr<FlightGoalHandle> Current_goal_handle_;
     // 無人機ID
     uint16_t UAV_ID_;
     // 單次飛行計畫會有的路徑點數量
@@ -40,6 +39,13 @@ private:
     // 無人機的飛行結果及狀態 (格式詳情參閱 ros2_ws/src/custom_interfaces/action/Flight.action)
     FlightAction::Result::SharedPtr UAV_result_status_;
 
+    // 無人機的 Action server
+    rclcpp_action::Server<FlightAction>::SharedPtr Action_servers_;
+    // 無人機的 Action client 號碼牌
+    std::shared_ptr<FlightGoalHandle> Current_goal_handle_;
+    // 給 maincontrol 傳遞 ready 的 publisher
+    rclcpp::Publisher<std_msgs::msg::UInt16>::SharedPtr ready_pub_;
+
     // 回調函數群組
     rclcpp::CallbackGroup::SharedPtr callback_group_Reentrant_;
     // 用來在背景定時發送 Feedback
@@ -47,8 +53,18 @@ private:
 
     // 發送PX4指令topic
     rclcpp::Publisher<px4_msgs::msg::VehicleCommand>::SharedPtr _vehicle_command_pub;
+    // 接收 PX4 是否就緒的 topic
+    rclcpp::Subscription<px4_msgs::msg::VehicleStatus>::SharedPtr status_sub_;
+    // 用來在背景定時檢查是否到達起飛時間
+    rclcpp::TimerBase::SharedPtr _start_timer;
     // Px4 id
     uint8_t mode_id;
+    // 模擬開始時間
+    rclcpp::Time start_time_;
+    // 判斷是否已經註冊成功
+    std::atomic<bool> mode_registered_{false};
+    // 平行註冊
+    std::thread init_thread_;
     // 內部自訂義 PX4 class
     std::unique_ptr<MyGotoMode> _goto_mode;
     // 內部自訂義 PX4 class
@@ -71,6 +87,12 @@ private:
      *
      */
     void Ros2MsgInit();
+
+    /**
+     * @brief 註冊 PX4 並建立連線
+     *
+     */
+    void initPX4Connection();
 
     /**
      * @brief 處理目標訊息
@@ -103,5 +125,9 @@ private:
      */
     void ExecuteFlight(const std::shared_ptr<FlightGoalHandle> goal_handle);
 
+    /**
+     * @brief 下達 PX4 飛行指令
+     *
+     */
     void PX4StartFlight();
 };

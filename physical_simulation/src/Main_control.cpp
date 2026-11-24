@@ -5,9 +5,10 @@ MainControl::MainControl(const rclcpp::NodeOptions &options) : Node("MainControl
   ParmInit();
   MemoryInit();
   Ros2MsgInit();
-  // 以下為測試程式碼
-  start_timer_ = this->create_wall_timer(
-      std::chrono::seconds(10), std::bind(&MainControl::SendTestTrajectory, this));
+
+  ready_timer_ = this->create_timer(
+      std::chrono::milliseconds(500),
+      std::bind(&MainControl::checkReadyBarrier, this));
 }
 
 void MainControl::ParmInit()
@@ -46,6 +47,34 @@ void MainControl::Ros2MsgInit()
         rcl_action_client_get_default_options());
     Action_clients_[i] = action_client;
   }
+
+  // 2. 訂閱全員就緒訊號（TransientLocal 確保晚啟動也能收到已就緒的 UAV）
+  rclcpp::QoS ready_qos(UAV_num_);
+  ready_qos.reliability(rclcpp::ReliabilityPolicy::Reliable);
+  ready_qos.durability(rclcpp::DurabilityPolicy::TransientLocal);
+  ready_sub_ = this->create_subscription<std_msgs::msg::UInt16>(
+      "/swarm/uav_ready", ready_qos,
+      [this](const std_msgs::msg::UInt16::SharedPtr msg)
+      {
+        ready_uavs_.insert(msg->data);
+      });
+}
+
+void MainControl::checkReadyBarrier()
+{
+  // 條件 A：所有 UAV 完成 doRegister() 且 pre_flight_checks_pass == true
+  if (static_cast<int>(ready_uavs_.size()) < UAV_num_)
+    return;
+
+  // 條件 B：所有 Action Server 皆已上線
+  for (size_t i = 1; i <= UAV_num_; ++i)
+    if (!Action_clients_[i]->action_server_is_ready())
+      return;
+
+  ready_timer_->cancel();
+
+  RCLCPP_INFO(this->get_logger(), "全員 %d 台無人機準備就緒，觸發同步起飛", UAV_num_);
+  SendTestTrajectory();
 }
 
 void MainControl::GetFlightPlan(std::vector<nav_msgs::msg::Trajectory::ConstSharedPtr> flight_plan)
@@ -81,15 +110,18 @@ void MainControl::GetFlightPlan(std::vector<nav_msgs::msg::Trajectory::ConstShar
 
 void MainControl::SendGoalAllUAV()
 {
+  // 設定比當下模擬時間晚 1.0 秒的共同出發時間戳，吸收多機排程延遲
+  rclcpp::Time sync_start_time = this->now() + rclcpp::Duration::from_seconds(1.0);
   for (size_t i = 1; i <= UAV_num_; ++i)
-    SendGoal(i);
+    SendGoal(i, sync_start_time);
 }
 
-void MainControl::SendGoal(int16_t UAV_id)
+void MainControl::SendGoal(int16_t UAV_id, rclcpp::Time start_time)
 {
   FlightAction::Goal flight_plan = FlightAction::Goal();
 
   flight_plan.trajectory = *Trajectorys_all_UAV_flight_plan_[UAV_id];
+  flight_plan.start_time = start_time;
   rclcpp_action::Client<FlightAction>::SendGoalOptions send_goal_options = rclcpp_action::Client<FlightAction>::SendGoalOptions();
 
   send_goal_options.goal_response_callback = [this, UAV_id](const FlightGoalHandle::SharedPtr &goal_handle) -> void
@@ -191,10 +223,6 @@ void MainControl::CancelGoal(int16_t UAV_id)
 
 void MainControl::SendTestTrajectory()
 {
-  // 1. 第一時間取消 Timer，確保只執行這一次
-  if (start_timer_)
-    start_timer_->cancel();
-
   std::vector<nav_msgs::msg::Trajectory::ConstSharedPtr> traj_ptr_all;
   traj_ptr_all.reserve(UAV_num_ + 1);
   for (size_t i = 1; i <= UAV_num_; i++)

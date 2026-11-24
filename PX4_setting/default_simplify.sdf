@@ -1,5 +1,3 @@
-<!-- 這是我自己定義只載入必要功能的精簡版 Gazebo world 請加到原始檔路徑-->
-<!-- 原始檔路徑 PX4-Autopilot/Tools/simulation/gz/worlds/ -->
 <?xml version="1.0" encoding="UTF-8"?>
 <sdf version="1.9">
   <world name="default_simplify">
@@ -83,3 +81,6 @@
     </spherical_coordinates>
   </world>
 </sdf>
+
+<!-- 這是我自己定義只載入必要功能的精簡版 Gazebo world 請加到原始檔路徑-->
+<!-- 原始檔路徑 PX4-Autopilot/Tools/simulation/gz/worlds/ -->

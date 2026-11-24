@@ -3,10 +3,12 @@
 #include <string>
 #include <vector>
 #include <cstdint>
+#include <unordered_set>
 
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_action/rclcpp_action.hpp>
 #include <rclcpp_components/register_node_macro.hpp>
+#include <std_msgs/msg/u_int16.hpp>
 
 #include "custom_interfaces/action/flight.hpp"
 
@@ -25,14 +27,12 @@ public:
   virtual ~MainControl() override = default;
 
 private:
-  // 所有無人機的 Action client
-  std::vector<rclcpp_action::Client<FlightAction>::SharedPtr> Action_clients_;
-  // 所有無人機的 Action server 號碼牌
-  std::vector<FlightGoalHandle::SharedPtr> goal_handles_;
   // 無人機數量
   uint16_t UAV_num_;
   // 單次飛行計畫會有的路徑點數量
   uint16_t Waypoint_num_;
+  // 確定每一台無人機是否準備完成
+  std::unordered_set<uint16_t> ready_uavs_;
   // 所有無人機的飛行計畫 (格式詳情參閱 https://docs.ros.org/en/jazzy/p/nav_msgs/msg/Trajectory.html)
   std::vector<nav_msgs::msg::Trajectory::ConstSharedPtr> Trajectorys_all_UAV_flight_plan_;
   // 所有無人機的模擬飛行結果 (格式詳情參閱 https://docs.ros.org/en/jazzy/p/nav_msgs/msg/Trajectory.html)
@@ -40,33 +40,16 @@ private:
   // 所有無人機的飛行結果狀態 (格式詳情參閱 ros2_ws/src/custom_interfaces/action/Flight.action)
   std::vector<FlightAction::Result::SharedPtr> UAV_all_result_status_;
 
+  // 所有無人機的 Action client
+  std::vector<rclcpp_action::Client<FlightAction>::SharedPtr> Action_clients_;
+  // 所有無人機的 Action server 號碼牌
+  std::vector<FlightGoalHandle::SharedPtr> goal_handles_;
+  // 確保所有無人機準備好的 Subscription
+  rclcpp::Subscription<std_msgs::msg::UInt16>::SharedPtr ready_sub_;
   // 回調函數群組
   rclcpp::CallbackGroup::SharedPtr callback_group_Reentrant_;
-  // (測試用)timer
-  rclcpp::TimerBase::SharedPtr start_timer_;
-
-  /**
-   * @brief (測試用)發送軌跡
-   *
-   */
-  void SendTestTrajectory();
-
-  /**
-   * @brief (測試用)軌跡產生器
-   *
-   */
-  nav_msgs::msg::Trajectory::ConstSharedPtr TestTrajectory(const rclcpp::Time &start_time,
-                                                           bool variable_speed,
-                                                           const std::string &frame_id = "map",
-                                                           double altitude_z = 10.0);
-
-  /**
-   * @brief (測試用)計算軌跡 B (5 ~ 25 m/s，每 10 秒切換一次速度狀態) 在時間 t 的 (速度 v, 切線加速度 a_t)
-   *
-   * @param t 時間
-   * @return std::pair<double, double> 速度 v, 切線加速度 a_t
-   */
-  std::pair<double, double> getVariableSpeedProfile(double t);
+  // 確保所有無人機準備好的timer
+  rclcpp::TimerBase::SharedPtr ready_timer_;
 
   /**
    * @brief 接收所有參數
@@ -87,6 +70,12 @@ private:
   void Ros2MsgInit();
 
   /**
+   * @brief 確認所有無人機準備就緒
+   *
+   */
+  void checkReadyBarrier();
+
+  /**
    * @brief 獲得飛行計畫
    *
    * @param flight_plan 飛行計畫
@@ -104,7 +93,7 @@ private:
    *
    * @param UAV_id 無人機ID
    */
-  void SendGoal(int16_t UAV_id);
+  void SendGoal(int16_t UAV_id, rclcpp::Time start_time);
 
   /**
    * @brief 處理傳達Goal之後收到的回覆
@@ -136,4 +125,27 @@ private:
    * @param UAV_id 無人機ID
    */
   void CancelGoal(int16_t UAV_id);
+
+  /**
+   * @brief (測試用)發送軌跡
+   *
+   */
+  void SendTestTrajectory();
+
+  /**
+   * @brief (測試用)軌跡產生器
+   *
+   */
+  nav_msgs::msg::Trajectory::ConstSharedPtr TestTrajectory(const rclcpp::Time &start_time,
+                                                           bool variable_speed,
+                                                           const std::string &frame_id = "map",
+                                                           double altitude_z = 10.0);
+
+  /**
+   * @brief (測試用)計算軌跡 B (5 ~ 25 m/s，每 10 秒切換一次速度狀態) 在時間 t 的 (速度 v, 切線加速度 a_t)
+   *
+   * @param t 時間
+   * @return std::pair<double, double> 速度 v, 切線加速度 a_t
+   */
+  std::pair<double, double> getVariableSpeedProfile(double t);
 };
