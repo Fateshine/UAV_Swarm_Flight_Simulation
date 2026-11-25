@@ -14,7 +14,7 @@ MyGotoMode::MyGotoMode(rclcpp::Node &node) : ModeBase(node, kModeName) {
   _vehicle_attitude = std::make_shared<px4_ros2::OdometryAttitude>(*this);
 
   UAV_ID = static_cast<uint16_t>(node.get_parameter("UAV_id").as_int());
-  // file_open();
+  file_open();
 }
 
 void MyGotoMode::setWaypoints(const std::vector<WaypointTask> &waypoints) {
@@ -85,32 +85,55 @@ void MyGotoMode::updateSetpoint(float dt_s) {
         _segment_initialized = true;
       }
 
+      // 物理速度上限（請對齊 PX4 參數 MPC_XY_VEL_MAX / MPC_Z_VEL_MAX_UP, DN）
+      // 必須高於軌跡標稱速度，無人機落後時才有追趕餘裕
+      constexpr float kPhysicalMaxHorizSpeed = 17.0f;
+      constexpr float kPhysicalMaxVertSpeed = 5.0f;
+
+      // 剩餘時間下限保護：避免超時或接近 0 秒時除以零暴衝或速度反向
+      constexpr float kMinHorizTimeRemS = 0.25f;
+      constexpr float kMinVertTimeRemS = 0.40f;
+
+      const rclcpp::Time now = node().get_clock()->now();
+      const float desired_duration_s = std::max(task.desired_duration_s, 0.2f);
+      const float elapsed_s =
+          static_cast<float>((now - _segment_start_time).seconds());
+      const float remaining_time_s = desired_duration_s - elapsed_s;
+
       const Eigen::Vector3f current_pos_m =
           _vehicle_local_position->positionNed();
-      const Eigen::Vector2f horiz_vec =
-          (target_position_m - current_pos_m).head<2>();
+      const Eigen::Vector3f pos_err_ned = target_position_m - current_pos_m;
+      const Eigen::Vector2f horiz_vec = pos_err_ned.head<2>();
       const float horiz_dist_m = horiz_vec.norm();
+      const float z_err_m = pos_err_ned.z();
 
-      // 1. 中間航點直接以該點期望速度指向目標，加減速與轉彎弧線全交由 PX4
-      // 飛控計算；
-      //    僅在最後一個終點做平滑減速停靠。
       const bool is_final_waypoint =
           (_current_wp_index == _waypoints.size() - 1);
-      const float target_horiz_speed =
-          is_final_waypoint
-              ? std::min(_max_horizontal_velocity_m_s, 1.5f * horiz_dist_m)
-              : _max_horizontal_velocity_m_s;
+
+      // 1. 水平速度：剩餘水平距離 / 剩餘時間
+      //    落後自動加速追趕、超前自動放慢；最後一點額外套用減速包絡線避免過衝
+      const float eff_horiz_rem_s =
+          std::max(remaining_time_s, kMinHorizTimeRemS);
+      float target_horiz_speed = horiz_dist_m / eff_horiz_rem_s;
+      if (is_final_waypoint) {
+        target_horiz_speed = std::min(target_horiz_speed, 1.5f * horiz_dist_m);
+      }
+      target_horiz_speed = std::min(target_horiz_speed, kPhysicalMaxHorizSpeed);
 
       Eigen::Vector2f vel_xy_ned = Eigen::Vector2f::Zero();
       if (horiz_dist_m > 0.05f) {
         vel_xy_ned = (horiz_vec / horiz_dist_m) * target_horiz_speed;
       }
 
-      // 2. 垂直高度比例控制
-      const float z_err_m = target_position_m.z() - current_pos_m.z();
-      const float vel_z_ned =
-          std::clamp(1.5f * z_err_m, -_max_vertical_velocity_m_s,
-                     _max_vertical_velocity_m_s);
+      // 2. 垂直速度：剩餘高度差 / 剩餘時間，確保三軸同步抵達
+      const float eff_vert_rem_s = std::max(remaining_time_s, kMinVertTimeRemS);
+      float vel_z_ned = z_err_m / eff_vert_rem_s;
+      if (is_final_waypoint) {
+        const float final_z_limit = 1.5f * std::fabs(z_err_m);
+        vel_z_ned = std::clamp(vel_z_ned, -final_z_limit, final_z_limit);
+      }
+      vel_z_ned =
+          std::clamp(vel_z_ned, -kPhysicalMaxVertSpeed, kPhysicalMaxVertSpeed);
 
       const Eigen::Vector3f vel_cmd_ned(vel_xy_ned.x(), vel_xy_ned.y(),
                                         vel_z_ned);
@@ -143,13 +166,14 @@ void MyGotoMode::initCurrentSegment(const Eigen::Vector3f &target_position_m) {
   const Eigen::Vector3f delta = target_position_m - _segment_start_pos_m;
   const float horiz_distance_m = delta.head<2>().norm();
   const float vert_distance_m = std::fabs(delta.z());
-  const float duration_s = std::max(task.desired_duration_s, 0.5f);
+  const float duration_s = std::max(task.desired_duration_s, 0.2f);
 
-  _max_horizontal_velocity_m_s = std::clamp(
-      (horiz_distance_m / duration_s) * kRampCompensation, 0.5f, 17.0f);
-
-  _max_vertical_velocity_m_s = std::clamp(
-      (vert_distance_m / duration_s) * kRampCompensation, 0.3f, 5.0f);
+  // 改為記錄該航段的理論標稱平均速度（供遙測報告與 CSV 記錄用）
+  // 閉迴路時間控制會自動補償加減速落後
+  _max_horizontal_velocity_m_s =
+      std::clamp(horiz_distance_m / duration_s, 0.0f, 17.0f);
+  _max_vertical_velocity_m_s =
+      std::clamp(vert_distance_m / duration_s, 0.0f, 5.0f);
 }
 
 bool MyGotoMode::positionReached(
@@ -183,51 +207,49 @@ WaypointTelemetryReport MyGotoMode::recordAndPrintReport(
   report.actual_duration_s = (now - _segment_start_time).seconds();
   report.time_error_s = report.actual_duration_s - report.desired_duration_s;
 
-  //   RCLCPP_INFO(
-  //       node().get_logger(),
-  //       "\n================ [路徑點 #%zu 抵達遙測結算報告]
-  //       ================\n" "  指定目標位置 (NED) : [%.3f, %.3f, %.3f] m\n"
-  //       "  實際抵達位置 (NED) : [%.3f, %.3f, %.3f] m\n"
-  //       "  各軸位置誤差 (XYZ) : [%.3f, %.3f, %.3f] m (總歐氏誤差: %.3f m)\n"
-  //       "  抵達瞬間速度 (NED) : [%.3f, %.3f, %.3f] m/s (合速度: %.3f m/s)\n"
-  //       "  期望抵達時間       : %.2f s (目標速度: %.2f m/s)\n"
-  //       "  實際飛行時間       : %.2f s (時間誤差: %+.2f s)\n"
-  //       "==============================================================",
-  //       report.waypoint_index, report.target_position_ned_m.x(),
-  //       report.target_position_ned_m.y(), report.target_position_ned_m.z(),
-  //       report.actual_position_ned_m.x(), report.actual_position_ned_m.y(),
-  //       report.actual_position_ned_m.z(), report.position_error_ned_m.x(),
-  //       report.position_error_ned_m.y(), report.position_error_ned_m.z(),
-  //       report.position_error_norm_m, report.actual_velocity_ned_m_s.x(),
-  //       report.actual_velocity_ned_m_s.y(),
-  //       report.actual_velocity_ned_m_s.z(), report.actual_speed_norm_m_s,
-  //       report.desired_duration_s, report.configured_max_horiz_speed_m_s,
-  //       report.actual_duration_s, report.time_error_s);
+  // RCLCPP_INFO(
+  //     node().get_logger(),
+  //     "\n================ [路徑點 #%zu 抵達遙測結算報告] ================\n"
+  //     "  指定目標位置 (NED) : [%.3f, %.3f, %.3f] m\n"
+  //     "  實際抵達位置 (NED) : [%.3f, %.3f, %.3f] m\n"
+  //     "  各軸位置誤差 (XYZ) : [%.3f, %.3f, %.3f] m (總歐氏誤差: %.3f m)\n"
+  //     "  抵達瞬間速度 (NED) : [%.3f, %.3f, %.3f] m/s (合速度: %.3f m/s)\n"
+  //     "  期望抵達時間       : %.2f s (目標速度: %.2f m/s)\n"
+  //     "  實際飛行時間       : %.2f s (時間誤差: %+.2f s)\n"
+  //     "==============================================================",
+  //     report.waypoint_index, report.target_position_ned_m.x(),
+  //     report.target_position_ned_m.y(), report.target_position_ned_m.z(),
+  //     report.actual_position_ned_m.x(), report.actual_position_ned_m.y(),
+  //     report.actual_position_ned_m.z(), report.position_error_ned_m.x(),
+  //     report.position_error_ned_m.y(), report.position_error_ned_m.z(),
+  //     report.position_error_norm_m, report.actual_velocity_ned_m_s.x(),
+  //     report.actual_velocity_ned_m_s.y(), report.actual_velocity_ned_m_s.z(),
+  //     report.actual_speed_norm_m_s, report.desired_duration_s,
+  //     report.configured_max_horiz_speed_m_s, report.actual_duration_s,
+  //     report.time_error_s);
 
-  // if (telemetry_csv_.is_open()) {
-  //   telemetry_csv_ << report.waypoint_index << ',' << std::fixed
-  //                  << std::setprecision(3) <<
-  //                  report.target_position_ned_m.x()
-  //                  << ',' << report.target_position_ned_m.y() << ','
-  //                  << report.target_position_ned_m.z() << ','
-  //                  << report.actual_position_ned_m.x() << ','
-  //                  << report.actual_position_ned_m.y() << ','
-  //                  << report.actual_position_ned_m.z() << ','
-  //                  << report.position_error_ned_m.x() << ','
-  //                  << report.position_error_ned_m.y() << ','
-  //                  << report.position_error_ned_m.z() << ','
-  //                  << report.position_error_norm_m << ','
-  //                  << report.actual_velocity_ned_m_s.x() << ','
-  //                  << report.actual_velocity_ned_m_s.y() << ','
-  //                  << report.actual_velocity_ned_m_s.z() << ','
-  //                  << report.actual_speed_norm_m_s << ','
-  //                  << std::setprecision(2) << report.desired_duration_s <<
-  //                  ','
-  //                  << report.configured_max_horiz_speed_m_s << ','
-  //                  << report.actual_duration_s << ',' << report.time_error_s
-  //                  << '\n';
-  //   telemetry_csv_.flush();  // 確保 Ctrl+C 中止模擬時不漏掉最後幾筆
-  // }
+  if (telemetry_csv_.is_open()) {
+    telemetry_csv_ << report.waypoint_index << ',' << std::fixed
+                   << std::setprecision(3) << report.target_position_ned_m.x()
+                   << ',' << report.target_position_ned_m.y() << ','
+                   << report.target_position_ned_m.z() << ','
+                   << report.actual_position_ned_m.x() << ','
+                   << report.actual_position_ned_m.y() << ','
+                   << report.actual_position_ned_m.z() << ','
+                   << report.position_error_ned_m.x() << ','
+                   << report.position_error_ned_m.y() << ','
+                   << report.position_error_ned_m.z() << ','
+                   << report.position_error_norm_m << ','
+                   << report.actual_velocity_ned_m_s.x() << ','
+                   << report.actual_velocity_ned_m_s.y() << ','
+                   << report.actual_velocity_ned_m_s.z() << ','
+                   << report.actual_speed_norm_m_s << ','
+                   << std::setprecision(2) << report.desired_duration_s << ','
+                   << report.configured_max_horiz_speed_m_s << ','
+                   << report.actual_duration_s << ',' << report.time_error_s
+                   << '\n';
+    telemetry_csv_.flush();  // 確保 Ctrl+C 中止模擬時不漏掉最後幾筆
+  }
 
   return report;
 }

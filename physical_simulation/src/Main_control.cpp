@@ -258,7 +258,7 @@ nav_msgs::msg::Trajectory::ConstSharedPtr MainControl::TestTrajectory(
   constexpr double kYawAmp2 = 0.25;  // 次偏航擺幅 (~14.3 deg)
 
   // Z 軸高度變化參數：在 [altitude_z, altitude_z + 2 * kZAmp] 之間平滑起伏
-  constexpr double kZAmp = 20.0;
+  constexpr double kZAmp = 10.0;
   constexpr double kZCycles = 2.0;
   constexpr double kZOmega = kZCycles * (2.0 * M_PI / kTotalDuration);
 
