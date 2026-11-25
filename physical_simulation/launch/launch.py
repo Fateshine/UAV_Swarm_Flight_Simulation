@@ -104,15 +104,13 @@ def generate_launch_description():
     )
     composable_nodes.append(main_control_node)
 
-    # 計算方陣排列座標，避免多機生成在同一個點重疊相撞
-    grid_cols = math.ceil(math.sqrt(UAV_count))
-    spacing_m = 2.0
+    # 沿 Y 軸（側向）排成一直線，避免前後追撞
+    spacing_m = 10.0
 
     for i in range(UAV_count):
         px4_instance_id = i + 1
-        spawn_x = (i // grid_cols) * spacing_m
-        spawn_y = (i % grid_cols) * spacing_m
-
+        spawn_x = 0.0
+        spawn_y = i * spacing_m
         # 5.2 啟動 PX4 SITL 獨立 Process (連線至上面 啟動的 GzServer)
         px4_env = os.environ.copy()
         px4_env["PX4_SYS_AUTOSTART"] = "4001"

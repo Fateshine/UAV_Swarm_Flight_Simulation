@@ -8,8 +8,8 @@
       <ode>
         <solver>
           <type>quick</type>
-          <!-- 預設為 50，純無人機模擬降至 15~20 減少物理引擎 CPU 負載 -->
-          <iters>15</iters>
+          <!-- 純無人機模擬降至 10 減少物理引擎 CPU 負載 -->
+          <iters>10</iters>
         </solver>
       </ode>
     </physics>

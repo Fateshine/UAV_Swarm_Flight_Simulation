@@ -1,20 +1,18 @@
 #pragma once
 
-#include <string>
-#include <vector>
 #include <cstdint>
-#include <unordered_set>
-
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_action/rclcpp_action.hpp>
 #include <rclcpp_components/register_node_macro.hpp>
 #include <std_msgs/msg/u_int16.hpp>
+#include <string>
+#include <unordered_set>
+#include <vector>
 
 #include "custom_interfaces/action/flight.hpp"
 
-class MainControl final : public rclcpp::Node
-{
-public:
+class MainControl final : public rclcpp::Node {
+ public:
   using FlightAction = custom_interfaces::action::Flight;
   using FlightGoalHandle = rclcpp_action::ClientGoalHandle<FlightAction>;
 
@@ -26,18 +24,22 @@ public:
   explicit MainControl(const rclcpp::NodeOptions &options);
   virtual ~MainControl() override = default;
 
-private:
+ private:
   // 無人機數量
   uint16_t UAV_num_;
   // 單次飛行計畫會有的路徑點數量
   uint16_t Waypoint_num_;
   // 確定每一台無人機是否準備完成
   std::unordered_set<uint16_t> ready_uavs_;
-  // 所有無人機的飛行計畫 (格式詳情參閱 https://docs.ros.org/en/jazzy/p/nav_msgs/msg/Trajectory.html)
-  std::vector<nav_msgs::msg::Trajectory::ConstSharedPtr> Trajectorys_all_UAV_flight_plan_;
-  // 所有無人機的模擬飛行結果 (格式詳情參閱 https://docs.ros.org/en/jazzy/p/nav_msgs/msg/Trajectory.html)
+  // 所有無人機的飛行計畫 (格式詳情參閱
+  // https://docs.ros.org/en/jazzy/p/nav_msgs/msg/Trajectory.html)
+  std::vector<nav_msgs::msg::Trajectory::ConstSharedPtr>
+      Trajectorys_all_UAV_flight_plan_;
+  // 所有無人機的模擬飛行結果 (格式詳情參閱
+  // https://docs.ros.org/en/jazzy/p/nav_msgs/msg/Trajectory.html)
   std::vector<nav_msgs::msg::Trajectory::SharedPtr> Trajectorys_all_UAV_result_;
-  // 所有無人機的飛行結果狀態 (格式詳情參閱 ros2_ws/src/custom_interfaces/action/Flight.action)
+  // 所有無人機的飛行結果狀態 (格式詳情參閱
+  // ros2_ws/src/custom_interfaces/action/Flight.action)
   std::vector<FlightAction::Result::SharedPtr> UAV_all_result_status_;
 
   // 所有無人機的 Action client
@@ -80,7 +82,8 @@ private:
    *
    * @param flight_plan 飛行計畫
    */
-  void GetFlightPlan(std::vector<nav_msgs::msg::Trajectory::ConstSharedPtr> flight_plan);
+  void GetFlightPlan(
+      std::vector<nav_msgs::msg::Trajectory::ConstSharedPtr> flight_plan);
 
   /**
    * @brief 派發飛行計畫給所有無人機
@@ -101,7 +104,8 @@ private:
    * @param UAV_id 無人機ID
    * @param goal_handle 號碼牌
    */
-  void GoalResponseCallback(int16_t UAV_id, const FlightGoalHandle::SharedPtr &goal_handle);
+  void GoalResponseCallback(int16_t UAV_id,
+                            const FlightGoalHandle::SharedPtr &goal_handle);
 
   /**
    * @brief 處理feedback回覆
@@ -109,7 +113,9 @@ private:
    * @param UAV_id  無人機ID
    * @param feedback feedback訊息
    */
-  void FeedbackCallback(int16_t UAV_id, const std::shared_ptr<const FlightAction::Feedback> feedback);
+  void FeedbackCallback(
+      int16_t UAV_id,
+      const std::shared_ptr<const FlightAction::Feedback> feedback);
 
   /**
    * @brief 處理result結果訊息
@@ -117,7 +123,8 @@ private:
    * @param UAV_id 無人機ID
    * @param result result訊息
    */
-  void ResultCallback(int16_t UAV_id, const FlightGoalHandle::WrappedResult &result);
+  void ResultCallback(int16_t UAV_id,
+                      const FlightGoalHandle::WrappedResult &result);
 
   /**
    * @brief 處理取消請求
@@ -136,13 +143,13 @@ private:
    * @brief (測試用)軌跡產生器
    *
    */
-  nav_msgs::msg::Trajectory::ConstSharedPtr TestTrajectory(const rclcpp::Time &start_time,
-                                                           bool variable_speed,
-                                                           const std::string &frame_id = "map",
-                                                           double altitude_z = 10.0);
+  nav_msgs::msg::Trajectory::ConstSharedPtr TestTrajectory(
+      const rclcpp::Time &start_time, bool variable_speed,
+      const std::string &frame_id = "map", double altitude_z = 50.0);
 
   /**
-   * @brief (測試用)計算軌跡 B (5 ~ 25 m/s，每 10 秒切換一次速度狀態) 在時間 t 的 (速度 v, 切線加速度 a_t)
+   * @brief (測試用)計算軌跡 B (5 ~ 25 m/s，每 10 秒切換一次速度狀態) 在時間 t
+   * 的 (速度 v, 切線加速度 a_t)
    *
    * @param t 時間
    * @return std::pair<double, double> 速度 v, 切線加速度 a_t
