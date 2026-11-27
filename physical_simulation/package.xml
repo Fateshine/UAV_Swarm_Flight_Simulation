@@ -20,6 +20,9 @@
   <depend>nav_msgs</depend>
   <depend>geometry_msgs</depend>
   <depend>custom_interfaces</depend>
+
+  <!-- 模擬器自定義介面依賴 -->
+  <depend>simulation_interfaces</depend>
   
   <!-- PX4訊息與介面依賴 -->
   <depend>px4_ros2_cpp</depend>

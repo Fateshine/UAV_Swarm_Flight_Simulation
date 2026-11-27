@@ -4,7 +4,12 @@
 
 #include "physical_simulation/PX4_goto_mode.hpp"
 
-// 模式執行器，負責管理高階狀態 (例如 起飛 -> 執行自訂 Mode -> 返航降落)
+/**
+ * @class MyGotoExecutor
+ * @brief 模式執行器，負責管理高階狀態 (解鎖 -> 起飛 -> 執行自訂 Mode ->
+ * 返航降落 -> 上鎖)
+ * 注意：本類別並非獨立的 rclcpp::Node，而是掛載於外部 Component 之下的邏輯實體
+ */
 class MyGotoExecutor : public px4_ros2::ModeExecutorBase {
  public:
   // 定義外部 Callback 型態：當整個 Executor 結束時回傳 Result 與所有遙測報告

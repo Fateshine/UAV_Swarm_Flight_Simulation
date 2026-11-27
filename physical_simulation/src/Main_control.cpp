@@ -5,6 +5,7 @@ MainControl::MainControl(const rclcpp::NodeOptions &options)
   ParmInit();
   MemoryInit();
   Ros2MsgInit();
+  GzMsgInit();
 
   ready_timer_ =
       this->create_timer(std::chrono::milliseconds(500),
@@ -35,6 +36,7 @@ void MainControl::MemoryInit() {
 }
 
 void MainControl::Ros2MsgInit() {
+  // 多台無人機回傳的 feedback / result 可在多條執行緒同時處理
   callback_group_Reentrant_ =
       rclcpp::Node::create_callback_group(rclcpp::CallbackGroupType::Reentrant);
   for (size_t i = 1; i <= UAV_num_; ++i) {
@@ -46,6 +48,11 @@ void MainControl::Ros2MsgInit() {
     Action_clients_[i] = action_client;
   }
 
+  callback_group_MutuallyExclusive_ = rclcpp::Node::create_callback_group(
+      rclcpp::CallbackGroupType::MutuallyExclusive);
+  rclcpp::SubscriptionOptions ready_options;
+  ready_options.callback_group = callback_group_MutuallyExclusive_;
+  ready_options.use_intra_process_comm = rclcpp::IntraProcessSetting::Disable;
   // 2. 訂閱全員就緒訊號（TransientLocal 確保晚啟動也能收到已就緒的 UAV）
   rclcpp::QoS ready_qos(UAV_num_);
   ready_qos.reliability(rclcpp::ReliabilityPolicy::Reliable);
@@ -54,7 +61,15 @@ void MainControl::Ros2MsgInit() {
       "/swarm/uav_ready", ready_qos,
       [this](const std_msgs::msg::UInt16::SharedPtr msg) {
         ready_uavs_.insert(msg->data);
-      });
+      },
+      ready_options);
+}
+
+void MainControl::GzMsgInit() {
+  callback_group_MutuallyExclusive_Gz = rclcpp::Node::create_callback_group(
+      rclcpp::CallbackGroupType::MutuallyExclusive);
+  Gazebo_control_ = std::make_unique<GazeboSimController>(
+      *this, callback_group_MutuallyExclusive_Gz);
 }
 
 void MainControl::checkReadyBarrier() {
@@ -222,6 +237,53 @@ void MainControl::CancelGoal(int16_t UAV_id) {
             return;
         }
       });
+}
+
+void MainControl::ResumeSimulation() {
+  using SimState = GazeboSimController::SimulationState;
+
+  Gazebo_control_->setSimulationState(SimState::STATE_PLAYING, [this](bool ok) {
+    if (!ok) {
+      RCLCPP_ERROR(this->get_logger(), "切換模擬繼續失敗。");
+      return;
+    }
+
+    // 非同步串接查詢，確認 Gazebo 確實處於 PLAYING 狀態
+    GetSimulationState([this](bool get_ok, SimState state) {
+      if (get_ok && state.state == SimState::STATE_PLAYING) {
+        RCLCPP_INFO(this->get_logger(), "已確認模擬繼續，可安全進行後續處理。");
+      } else {
+        RCLCPP_WARN(this->get_logger(), "模擬狀態與預期不符（目前：%u）。",
+                    state.state);
+      }
+    });
+  });
+}
+
+void MainControl::PauseSimulation() {
+  using SimState = GazeboSimController::SimulationState;
+
+  Gazebo_control_->setSimulationState(SimState::STATE_PAUSED, [this](bool ok) {
+    if (!ok) {
+      RCLCPP_ERROR(this->get_logger(), "切換模擬暫停失敗。");
+      return;
+    }
+
+    // 非同步串接查詢，確認 Gazebo 確實處於 PAUSED 狀態
+    GetSimulationState([this](bool get_ok, SimState state) {
+      if (get_ok && state.state == SimState::STATE_PAUSED) {
+        RCLCPP_INFO(this->get_logger(), "已確認模擬暫停，可安全進行後續處理。");
+      } else {
+        RCLCPP_WARN(this->get_logger(), "模擬狀態與預期不符（目前：%u）。",
+                    state.state);
+      }
+    });
+  });
+}
+
+void MainControl::GetSimulationState(
+    GazeboSimController::StateCallback on_result) {
+  Gazebo_control_->getSimulationState(std::move(on_result));
 }
 
 void MainControl::SendTestTrajectory() {

@@ -26,10 +26,13 @@ find_package(px4_ros2_cpp REQUIRED)
 find_package(eigen3_cmake_module REQUIRED)
 find_package(Eigen3 REQUIRED)
 
+# 尋找 Gazebo 介面庫
+find_package(simulation_interfaces REQUIRED)
+
 # ==========================================
 # 元件 1 Main Control (Action Client) SHARED 動態函式庫
 # ==========================================
-add_library(Main_control_component SHARED src/Main_control.cpp)
+add_library(Main_control_component SHARED src/Main_control.cpp src/Gazebo_control.cpp)
 
 # 設定標頭檔路徑 (讓 cpp 找得到 hpp)
 # Component 必須使用 PUBLIC 與 Generator Expressions 以供容器正確載入與連結
@@ -46,6 +49,7 @@ ament_target_dependencies(Main_control_component
   nav_msgs
   geometry_msgs
   custom_interfaces
+  simulation_interfaces
 )
 
 # 註冊外掛節點

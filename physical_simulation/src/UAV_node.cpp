@@ -29,8 +29,9 @@ void UAVNode::MemoryInit() {
 }
 
 void UAVNode::Ros2MsgInit() {
-  callback_group_Reentrant_ =
-      rclcpp::Node::create_callback_group(rclcpp::CallbackGroupType::Reentrant);
+  // 單機內部依序執行，保護單機飛控狀態機與任務切換免於競爭，省去內部鎖開銷。
+  callback_group_MutuallyExclusive_ = rclcpp::Node::create_callback_group(
+      rclcpp::CallbackGroupType::MutuallyExclusive);
 
   std::string action_name = "/px4_" + std::to_string(UAV_ID_) + "/navigate";
   Action_servers_ = rclcpp_action::create_server<FlightAction>(
@@ -53,22 +54,32 @@ void UAVNode::Ros2MsgInit() {
       [this](
           const std::shared_ptr<rclcpp_action::ServerGoalHandle<FlightAction>>
               goal_handle) -> void { this->HandleAccepted(goal_handle); },
-      rcl_action_server_get_default_options(), callback_group_Reentrant_);
+      rcl_action_server_get_default_options(),
+      callback_group_MutuallyExclusive_);
 
   // 建立傳送 ready 給 main control 的 publisher
   rclcpp::QoS ready_qos(1);
   ready_qos.reliability(rclcpp::ReliabilityPolicy::Reliable);
   ready_qos.durability(rclcpp::DurabilityPolicy::TransientLocal);
-  ready_pub_ = this->create_publisher<std_msgs::msg::UInt16>("/swarm/uav_ready",
-                                                             ready_qos);
+  rclcpp::PublisherOptions ready_options;
+  ready_options.use_intra_process_comm = rclcpp::IntraProcessSetting::Disable;
+  ready_pub_ = this->create_publisher<std_msgs::msg::UInt16>(
+      "/swarm/uav_ready", ready_qos, ready_options);
 
   //  建立 PX4 指令Publisher
+  rclcpp::PublisherOptions PX4_pub_options;
+  PX4_pub_options.use_intra_process_comm = rclcpp::IntraProcessSetting::Disable;
+
   std::string Publish_name =
       "/px4_" + std::to_string(UAV_ID_) + "/fmu/in/vehicle_command";
-  _vehicle_command_pub =
-      this->create_publisher<px4_msgs::msg::VehicleCommand>(Publish_name, 10);
+  _vehicle_command_pub = this->create_publisher<px4_msgs::msg::VehicleCommand>(
+      Publish_name, 10, PX4_pub_options);
 
   // 2. 監控 pre_flight_checks_pass，搭配 doRegister() 結果決定是否廣播就緒
+  rclcpp::SubscriptionOptions PX4_sub_options;
+  PX4_sub_options.callback_group = callback_group_MutuallyExclusive_;
+  PX4_sub_options.use_intra_process_comm = rclcpp::IntraProcessSetting::Disable;
+
   std::string Sub_name =
       "/px4_" + std::to_string(UAV_ID_) + "/fmu/out/vehicle_status_v4";
   status_sub_ = this->create_subscription<px4_msgs::msg::VehicleStatus>(
@@ -89,7 +100,8 @@ void UAVNode::Ros2MsgInit() {
 
           status_sub_.reset();  // 關閉Subscription
         }
-      });
+      },
+      PX4_sub_options);
 }
 
 void UAVNode::initPX4Connection() {

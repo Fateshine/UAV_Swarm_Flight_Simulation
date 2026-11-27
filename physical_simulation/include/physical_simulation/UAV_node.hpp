@@ -12,6 +12,10 @@
 #include "custom_interfaces/action/flight.hpp"
 #include "physical_simulation/PX4_executor.hpp"
 
+/**
+ * @class UAVNode
+ * @brief 用於控制飛控，讓無人機飛行，並接收來自maincontrol的指令
+ */
 class UAVNode final : public rclcpp::Node {
  public:
   using FlightAction = custom_interfaces::action::Flight;
@@ -48,7 +52,7 @@ class UAVNode final : public rclcpp::Node {
   rclcpp::Publisher<std_msgs::msg::UInt16>::SharedPtr ready_pub_;
 
   // 回調函數群組
-  rclcpp::CallbackGroup::SharedPtr callback_group_Reentrant_;
+  rclcpp::CallbackGroup::SharedPtr callback_group_MutuallyExclusive_;
   // 用來在背景定時發送 Feedback
   rclcpp::TimerBase::SharedPtr _feedback_timer;
 

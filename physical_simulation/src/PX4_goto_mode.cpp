@@ -14,7 +14,8 @@ MyGotoMode::MyGotoMode(rclcpp::Node &node) : ModeBase(node, kModeName) {
   _vehicle_attitude = std::make_shared<px4_ros2::OdometryAttitude>(*this);
 
   UAV_ID = static_cast<uint16_t>(node.get_parameter("UAV_id").as_int());
-  file_open();
+  // 寫入Telemony 資料用
+  // file_open();
 }
 
 void MyGotoMode::setWaypoints(const std::vector<WaypointTask> &waypoints) {
@@ -228,28 +229,30 @@ WaypointTelemetryReport MyGotoMode::recordAndPrintReport(
   //     report.configured_max_horiz_speed_m_s, report.actual_duration_s,
   //     report.time_error_s);
 
-  if (telemetry_csv_.is_open()) {
-    telemetry_csv_ << report.waypoint_index << ',' << std::fixed
-                   << std::setprecision(3) << report.target_position_ned_m.x()
-                   << ',' << report.target_position_ned_m.y() << ','
-                   << report.target_position_ned_m.z() << ','
-                   << report.actual_position_ned_m.x() << ','
-                   << report.actual_position_ned_m.y() << ','
-                   << report.actual_position_ned_m.z() << ','
-                   << report.position_error_ned_m.x() << ','
-                   << report.position_error_ned_m.y() << ','
-                   << report.position_error_ned_m.z() << ','
-                   << report.position_error_norm_m << ','
-                   << report.actual_velocity_ned_m_s.x() << ','
-                   << report.actual_velocity_ned_m_s.y() << ','
-                   << report.actual_velocity_ned_m_s.z() << ','
-                   << report.actual_speed_norm_m_s << ','
-                   << std::setprecision(2) << report.desired_duration_s << ','
-                   << report.configured_max_horiz_speed_m_s << ','
-                   << report.actual_duration_s << ',' << report.time_error_s
-                   << '\n';
-    telemetry_csv_.flush();  // 確保 Ctrl+C 中止模擬時不漏掉最後幾筆
-  }
+  // if (telemetry_csv_.is_open()) {
+  //   telemetry_csv_ << report.waypoint_index << ',' << std::fixed
+  //                  << std::setprecision(3) <<
+  //                  report.target_position_ned_m.x()
+  //                  << ',' << report.target_position_ned_m.y() << ','
+  //                  << report.target_position_ned_m.z() << ','
+  //                  << report.actual_position_ned_m.x() << ','
+  //                  << report.actual_position_ned_m.y() << ','
+  //                  << report.actual_position_ned_m.z() << ','
+  //                  << report.position_error_ned_m.x() << ','
+  //                  << report.position_error_ned_m.y() << ','
+  //                  << report.position_error_ned_m.z() << ','
+  //                  << report.position_error_norm_m << ','
+  //                  << report.actual_velocity_ned_m_s.x() << ','
+  //                  << report.actual_velocity_ned_m_s.y() << ','
+  //                  << report.actual_velocity_ned_m_s.z() << ','
+  //                  << report.actual_speed_norm_m_s << ','
+  //                  << std::setprecision(2) << report.desired_duration_s <<
+  //                  ','
+  //                  << report.configured_max_horiz_speed_m_s << ','
+  //                  << report.actual_duration_s << ',' << report.time_error_s
+  //                  << '\n';
+  //   telemetry_csv_.flush();  // 確保 Ctrl+C 中止模擬時不漏掉最後幾筆
+  // }
 
   return report;
 }

@@ -10,11 +10,17 @@
 #include <vector>
 
 #include "custom_interfaces/action/flight.hpp"
+#include "physical_simulation/Gazebo_control.hpp"
 
+/**
+ * @class MainControl
+ * @brief 用於控制主模擬系統 (包含各自無人機和Gazebo)
+ */
 class MainControl final : public rclcpp::Node {
  public:
   using FlightAction = custom_interfaces::action::Flight;
   using FlightGoalHandle = rclcpp_action::ClientGoalHandle<FlightAction>;
+  using SimState = GazeboSimController::SimulationState;
 
   /**
    * @brief 初始化
@@ -50,8 +56,12 @@ class MainControl final : public rclcpp::Node {
   rclcpp::Subscription<std_msgs::msg::UInt16>::SharedPtr ready_sub_;
   // 回調函數群組
   rclcpp::CallbackGroup::SharedPtr callback_group_Reentrant_;
+  rclcpp::CallbackGroup::SharedPtr callback_group_MutuallyExclusive_,
+      callback_group_MutuallyExclusive_Gz;
   // 確保所有無人機準備好的timer
   rclcpp::TimerBase::SharedPtr ready_timer_;
+  // 內部自訂義 Gazebo control class
+  std::unique_ptr<GazeboSimController> Gazebo_control_;
 
   /**
    * @brief 接收所有參數
@@ -70,6 +80,12 @@ class MainControl final : public rclcpp::Node {
    *
    */
   void Ros2MsgInit();
+
+  /**
+   * @brief 初始化所有Gazebo訊息
+   *
+   */
+  void GzMsgInit();
 
   /**
    * @brief 確認所有無人機準備就緒
@@ -132,6 +148,24 @@ class MainControl final : public rclcpp::Node {
    * @param UAV_id 無人機ID
    */
   void CancelGoal(int16_t UAV_id);
+
+  /**
+   * @brief 暫停模擬
+   *
+   */
+  void PauseSimulation();
+
+  /**
+   * @brief 繼續模擬
+   *
+   */
+  void ResumeSimulation();
+
+  /**
+   * @brief 獲取模擬狀態
+   *
+   */
+  void GetSimulationState(GazeboSimController::StateCallback on_result);
 
   /**
    * @brief (測試用)發送軌跡

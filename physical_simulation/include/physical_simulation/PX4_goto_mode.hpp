@@ -40,8 +40,11 @@ struct WaypointTelemetryReport {
   double time_error_s{0.0};                   // 時間誤差 (正值代表延遲)
 };
 
-// 自訂飛行模式，繼承自 px4_ros2::ModeBase
-// 注意：本類別並非獨立的 rclcpp::Node，而是掛載於外部 Component 之下的邏輯實體
+/**
+ * @class MyGotoMode
+ * @brief 自訂飛行模式，讓無人機朝向指定連續軌跡點飛行
+ * 注意：本類別並非獨立的 rclcpp::Node，而是掛載於外部 Component 之下的邏輯實體
+ */
 class MyGotoMode : public px4_ros2::ModeBase {
  public:
   // 建構子強制接收外部 rclcpp::Node 參考，以建立與 PX4 溝通的底層
